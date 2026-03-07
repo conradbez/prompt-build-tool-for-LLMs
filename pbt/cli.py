@@ -16,12 +16,20 @@ import sys
 from pathlib import Path
 
 import click
+import networkx as nx
 from rich.console import Console
 from rich.table import Table
 from rich import box
 
 from pbt import db
-from pbt.graph import load_models, execution_order, build_dag, CyclicDependencyError, UnknownModelError
+from pbt.graph import (
+    load_models,
+    execution_order,
+    build_dag,
+    compute_dag_hash,
+    CyclicDependencyError,
+    UnknownModelError,
+)
 from pbt.executor import execute_run, ModelRunResult
 
 console = Console()
@@ -53,7 +61,10 @@ def main() -> None:
     "--select", "-s",
     multiple=True,
     metavar="MODEL",
-    help="Run only these models (and their dependencies). Repeatable.",
+    help=(
+        "Run only these models, reusing upstream outputs from the latest "
+        "matching run. Repeatable: -s tweet -s haiku"
+    ),
 )
 @click.option(
     "--no-color",
@@ -82,30 +93,77 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool) -> None:
         err_console.print(f"[red]Dependency error:[/red] {exc}")
         sys.exit(1)
 
-    # Optional model selection (include dependencies automatically)
+    dag_hash = compute_dag_hash(all_models)
+
+    # ------------------------------------------------------------------
+    # --select: only run chosen models, load upstream outputs from DB
+    # ------------------------------------------------------------------
+    preloaded_outputs: dict[str, str] = {}
+
     if select:
-        import networkx as nx
-        dag = build_dag(all_models)
-        selected_set: set[str] = set(select)
+        # Validate names
         for name in select:
             if name not in all_models:
                 err_console.print(f"[red]Unknown model:[/red] '{name}'")
                 sys.exit(1)
-            # Include all ancestors (upstream dependencies)
-            selected_set.update(nx.ancestors(dag, name))
+
+        selected_set = set(select)
+        dag = build_dag(all_models)
+
+        # Determine which upstream models we need outputs for but won't run
+        upstream_needed: set[str] = set()
+        for name in selected_set:
+            upstream_needed.update(nx.ancestors(dag, name))
+        upstream_needed -= selected_set
+
+        if upstream_needed:
+            prev_run = db.get_latest_run_with_dag_hash(dag_hash)
+            if prev_run is None:
+                err_console.print(
+                    f"[red]Error:[/red] --select requires a previous run with the "
+                    f"same DAG structure (hash [bold]{dag_hash}[/bold]).\n"
+                    f"Run [bold]pbt run[/bold] without --select first."
+                )
+                sys.exit(1)
+
+            preloaded_outputs = db.get_model_outputs_from_run(
+                prev_run["run_id"], list(upstream_needed)
+            )
+
+            missing = upstream_needed - set(preloaded_outputs)
+            if missing:
+                err_console.print(
+                    f"[red]Error:[/red] Previous run [dim]{prev_run['run_id']}[/dim] "
+                    f"is missing successful outputs for: {sorted(missing)}\n"
+                    f"Those models may have errored. Run [bold]pbt run[/bold] first."
+                )
+                sys.exit(1)
+
+        # Only execute the explicitly selected models (in topological order)
         ordered = [m for m in ordered if m.name in selected_set]
 
     # ------------------------------------------------------------------
     # Print run header
     # ------------------------------------------------------------------
     git_sha = _git_sha()
-    run_id = db.create_run(model_count=len(ordered), git_sha=git_sha)
+    run_id = db.create_run(
+        model_count=len(ordered),
+        dag_hash=dag_hash,
+        git_sha=git_sha,
+    )
 
     c.rule("[bold cyan]pbt run[/bold cyan]")
-    c.print(f"  Run ID  : [dim]{run_id}[/dim]")
-    c.print(f"  Models  : {len(ordered)}")
+    c.print(f"  Run ID   : [dim]{run_id}[/dim]")
+    c.print(f"  DAG hash : [dim]{dag_hash}[/dim]")
+    c.print(f"  Models   : {len(ordered)}", end="")
+    if preloaded_outputs:
+        c.print(
+            f"  [dim](+{len(preloaded_outputs)} reused from previous run)[/dim]"
+        )
+    else:
+        c.print()
     if git_sha:
-        c.print(f"  Git SHA : [dim]{git_sha}[/dim]")
+        c.print(f"  Git SHA  : [dim]{git_sha}[/dim]")
     c.print()
 
     # ------------------------------------------------------------------
@@ -115,24 +173,24 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool) -> None:
     total = len(ordered)
 
     def on_start(name: str) -> None:
-        idx = sum(1 for r in results if r.status != "pending") + 1
+        idx = len(results) + 1
         c.print(f"  [{idx}/{total}] [bold]{name}[/bold] … ", end="")
 
     def on_done(result: ModelRunResult) -> None:
         results.append(result)
         if result.status == "success":
-            ms = result.execution_ms
-            c.print(f"[green]OK[/green] [dim]({ms} ms)[/dim]")
+            c.print(f"[green]OK[/green] [dim]({result.execution_ms} ms)[/dim]")
         elif result.status == "skipped":
             c.print("[yellow]SKIPPED[/yellow]")
         else:
-            c.print(f"[red]ERROR[/red]")
+            c.print("[red]ERROR[/red]")
             c.print(f"    [dim]{result.error}[/dim]")
 
     try:
         all_results = execute_run(
             run_id=run_id,
             ordered_models=ordered,
+            preloaded_outputs=preloaded_outputs,
             on_model_start=on_start,
             on_model_done=on_done,
         )
@@ -155,13 +213,16 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool) -> None:
     c.rule()
 
     summary = Table(box=box.SIMPLE, show_header=False)
-    summary.add_row("Done  :", f"[green]{successes}[/green] succeeded")
+    summary.add_row("Done    :", f"[green]{successes}[/green] succeeded")
     if errors:
-        summary.add_row("      :", f"[red]{errors}[/red] errored")
+        summary.add_row("        :", f"[red]{errors}[/red] errored")
     if skipped:
-        summary.add_row("      :", f"[yellow]{skipped}[/yellow] skipped")
-    summary.add_row("Run ID:", f"[dim]{run_id}[/dim]")
-    summary.add_row("DB    :", f"[dim]{db.db_path()}[/dim]")
+        summary.add_row("        :", f"[yellow]{skipped}[/yellow] skipped")
+    if preloaded_outputs:
+        summary.add_row("Reused  :", f"[dim]{len(preloaded_outputs)} from previous run[/dim]")
+    summary.add_row("Run ID  :", f"[dim]{run_id}[/dim]")
+    summary.add_row("DAG hash:", f"[dim]{dag_hash}[/dim]")
+    summary.add_row("DB      :", f"[dim]{db.db_path()}[/dim]")
     c.print(summary)
 
     if errors:
@@ -183,7 +244,12 @@ def list_models(models_dir: str) -> None:
         err_console.print(str(exc))
         sys.exit(1)
 
-    table = Table(title="Prompt Models", box=box.ROUNDED)
+    dag_hash = compute_dag_hash(models)
+
+    table = Table(
+        title=f"Prompt Models  [dim](DAG hash: {dag_hash})[/dim]",
+        box=box.ROUNDED,
+    )
     table.add_column("#", style="dim", justify="right")
     table.add_column("Model", style="bold cyan")
     table.add_column("Depends on")
@@ -213,19 +279,28 @@ def show_runs(limit: int) -> None:
 
     table = Table(title="Recent Runs", box=box.ROUNDED)
     table.add_column("Run ID", style="dim", no_wrap=True)
+    table.add_column("Date")
     table.add_column("Status")
     table.add_column("Models", justify="right")
+    table.add_column("DAG hash", style="dim")
     table.add_column("Created at")
     table.add_column("Completed at")
 
-    status_styles = {"success": "green", "error": "red", "partial": "yellow", "running": "cyan"}
+    status_styles = {
+        "success": "green",
+        "error": "red",
+        "partial": "yellow",
+        "running": "cyan",
+    }
 
     for row in rows:
         style = status_styles.get(row["status"], "")
         table.add_row(
             row["run_id"],
+            row["run_date"] or "—",
             f"[{style}]{row['status']}[/{style}]",
             str(row["model_count"]),
+            row["dag_hash"] or "—",
             _fmt_ts(row["created_at"]),
             _fmt_ts(row["completed_at"]) if row["completed_at"] else "—",
         )
@@ -303,5 +378,4 @@ def _git_sha() -> str | None:
 def _fmt_ts(ts: str | None) -> str:
     if not ts:
         return "—"
-    # SQLite stores ISO strings; just return the readable part
     return str(ts)[:19].replace("T", " ")

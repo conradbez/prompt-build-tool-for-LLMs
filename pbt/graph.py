@@ -9,9 +9,12 @@ resolves model DAGs.
 
 from __future__ import annotations
 
-import os
+import hashlib
+import heapq
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 
 import networkx as nx
 
@@ -80,17 +83,17 @@ def build_dag(models: dict[str, PromptModel]) -> nx.DiGraph:
         If the graph contains a cycle.
     """
     dag: nx.DiGraph = nx.DiGraph()
-    dag.add_nodes_from(models.keys())
+    dag.add_nodes_from(sorted(models.keys()))  # sorted for determinism
 
-    for model in models.values():
-        for dep in model.depends_on:
+    for name in sorted(models):               # sorted for determinism
+        for dep in sorted(models[name].depends_on):
             if dep not in models:
                 raise UnknownModelError(
-                    f"Model '{model.name}' references ref('{dep}'), "
+                    f"Model '{name}' references ref('{dep}'), "
                     f"but '{dep}.prompt' does not exist in the models directory."
                 )
             # Edge: dep → model  (dep must execute first)
-            dag.add_edge(dep, model.name)
+            dag.add_edge(dep, name)
 
     if not nx.is_directed_acyclic_graph(dag):
         cycles = list(nx.simple_cycles(dag))
@@ -105,7 +108,53 @@ def execution_order(models: dict[str, PromptModel]) -> list[PromptModel]:
     """
     Return models in topological order — upstream models first, so each
     model's dependencies are satisfied before it runs.
+
+    The sort is deterministic: among models at the same depth, names are
+    ordered lexicographically so the execution order never changes unless
+    the DAG structure actually changes.
     """
     dag = build_dag(models)
-    sorted_names = list(nx.topological_sort(dag))
+    sorted_names = list(_lex_topo_sort(dag))
     return [models[name] for name in sorted_names]
+
+
+def _lex_topo_sort(dag: nx.DiGraph) -> Iterator[str]:
+    """
+    Deterministic topological sort: at each step pick the lexicographically
+    smallest ready node. Equivalent to nx.lexicographic_topological_sort
+    (added in networkx 3.0) but works with older versions too.
+    """
+    in_degree = {n: dag.in_degree(n) for n in dag}
+    heap: list[str] = [n for n, d in in_degree.items() if d == 0]
+    heapq.heapify(heap)
+    while heap:
+        node = heapq.heappop(heap)
+        yield node
+        for successor in dag.successors(node):
+            in_degree[successor] -= 1
+            if in_degree[successor] == 0:
+                heapq.heappush(heap, successor)
+
+
+def compute_dag_hash(models: dict[str, PromptModel]) -> str:
+    """
+    Return a short, deterministic hash of the DAG *structure* only —
+    i.e. the set of model names and their dependency edges.
+
+    The hash changes when:
+      - a model is added or removed
+      - any dependency edge is added or removed
+
+    It does NOT change when prompt file *content* changes (only structure).
+    This is intentional: the hash is used to validate that a previous run's
+    outputs are safe to reuse for a --select run on the same DAG.
+    """
+    # Represent as sorted list-of-tuples for full determinism
+    structure = [
+        (name, sorted(model.depends_on))
+        for name, model in sorted(models.items())
+    ]
+    digest = hashlib.sha256(
+        json.dumps(structure, separators=(",", ":")).encode()
+    ).hexdigest()
+    return digest[:16]

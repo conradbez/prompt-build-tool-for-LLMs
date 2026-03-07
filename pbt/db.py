@@ -10,6 +10,7 @@ model_results
     One row per model per run — stores rendered prompt input and LLM output.
 """
 
+import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -42,17 +43,19 @@ def get_conn():
 
 
 def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, then apply any pending migrations."""
     with get_conn() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS runs (
                 run_id       TEXT        PRIMARY KEY,
-                created_at   TIMESTAMP   NOT NULL,
+                run_date     TEXT        NOT NULL,   -- YYYY-MM-DD, for easy date-based filtering
+                created_at   TEXT        NOT NULL,   -- ISO-8601 UTC datetime
                 status       TEXT        NOT NULL DEFAULT 'running',
                               -- 'running' | 'success' | 'error' | 'partial'
-                completed_at TIMESTAMP,
+                completed_at TEXT,
                 model_count  INTEGER     NOT NULL DEFAULT 0,
-                git_sha      TEXT
+                git_sha      TEXT,
+                dag_hash     TEXT        -- short SHA256 of the DAG structure
             );
 
             CREATE TABLE IF NOT EXISTS model_results (
@@ -64,30 +67,54 @@ def init_db() -> None:
                 prompt_template  TEXT,     -- raw .prompt file contents
                 prompt_rendered  TEXT,     -- fully-rendered prompt sent to LLM
                 llm_output       TEXT,     -- raw LLM response text
-                started_at       TIMESTAMP,
-                completed_at     TIMESTAMP,
+                started_at       TEXT,
+                completed_at     TEXT,
                 execution_ms     INTEGER,
                 error            TEXT,
-                -- dependency chain (JSON list of model names)
                 depends_on       TEXT      NOT NULL DEFAULT '[]'
             );
 
             CREATE INDEX IF NOT EXISTS idx_model_results_run
                 ON model_results (run_id, model_name);
+
+            CREATE INDEX IF NOT EXISTS idx_runs_dag_hash
+                ON runs (dag_hash, created_at DESC);
         """)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """
+    Idempotent migrations for databases created before new columns existed.
+    ALTER TABLE ADD COLUMN is a no-op if the column is already present.
+    """
+    migrations = [
+        ("runs", "run_date",  "TEXT NOT NULL DEFAULT ''"),
+        ("runs", "dag_hash",  "TEXT"),
+    ]
+    for table, col, defn in migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 # ---------------------------------------------------------------------------
 # Run helpers
 # ---------------------------------------------------------------------------
 
-def create_run(model_count: int, git_sha: Optional[str] = None) -> str:
+def create_run(
+    model_count: int,
+    dag_hash: str,
+    git_sha: Optional[str] = None,
+) -> str:
     run_id = str(uuid.uuid4())
+    now = _now()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO runs (run_id, created_at, status, model_count, git_sha) "
-            "VALUES (?, ?, 'running', ?, ?)",
-            (run_id, _now(), model_count, git_sha),
+            "INSERT INTO runs (run_id, run_date, created_at, status, model_count, git_sha, dag_hash) "
+            "VALUES (?, ?, ?, 'running', ?, ?, ?)",
+            (run_id, _today(now), now, model_count, git_sha, dag_hash),
         )
     return run_id
 
@@ -101,6 +128,48 @@ def finish_run(run_id: str, status: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Previous-run lookup (for --select)
+# ---------------------------------------------------------------------------
+
+def get_latest_run_with_dag_hash(dag_hash: str) -> Optional[sqlite3.Row]:
+    """
+    Return the most recent successful (or partial) run that matches *dag_hash*.
+    Returns None if no such run exists.
+    """
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT * FROM runs
+               WHERE dag_hash = ?
+                 AND status IN ('success', 'partial')
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            (dag_hash,),
+        ).fetchone()
+
+
+def get_model_outputs_from_run(
+    run_id: str,
+    model_names: list[str],
+) -> dict[str, str]:
+    """
+    Fetch the LLM outputs for *model_names* from a specific run.
+    Only returns models that completed with status='success'.
+    """
+    if not model_names:
+        return {}
+    placeholders = ",".join("?" * len(model_names))
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT model_name, llm_output FROM model_results
+                WHERE run_id = ?
+                  AND model_name IN ({placeholders})
+                  AND status = 'success'""",
+            (run_id, *model_names),
+        ).fetchall()
+    return {row["model_name"]: row["llm_output"] for row in rows}
+
+
+# ---------------------------------------------------------------------------
 # Model result helpers
 # ---------------------------------------------------------------------------
 
@@ -110,7 +179,6 @@ def upsert_model_pending(
     prompt_template: str,
     depends_on: list[str],
 ) -> None:
-    import json
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO model_results
@@ -142,10 +210,16 @@ def mark_model_success(
             "SELECT started_at FROM model_results WHERE run_id=? AND model_name=?",
             (run_id, model_name),
         ).fetchone()
-        started = row["started_at"] if row else now
-        elapsed = int(
-            (now - started).total_seconds() * 1000
-        ) if isinstance(started, datetime) else 0
+        started_str = row["started_at"] if row else None
+        if started_str:
+            try:
+                started_dt = datetime.fromisoformat(started_str)
+                now_dt = datetime.fromisoformat(now)
+                elapsed = int((now_dt - started_dt).total_seconds() * 1000)
+            except (ValueError, TypeError):
+                elapsed = 0
+        else:
+            elapsed = 0
 
         conn.execute(
             """UPDATE model_results
@@ -200,5 +274,11 @@ def get_latest_runs(limit: int = 10) -> list[sqlite3.Row]:
 # Internal
 # ---------------------------------------------------------------------------
 
-def _now() -> datetime:
-    return datetime.utcnow()
+def _now() -> str:
+    """ISO-8601 UTC datetime string, stored as TEXT in SQLite."""
+    return datetime.utcnow().isoformat(timespec="milliseconds")
+
+
+def _today(now: str) -> str:
+    """Extract YYYY-MM-DD from an ISO datetime string."""
+    return now[:10]

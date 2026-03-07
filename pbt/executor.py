@@ -62,6 +62,7 @@ def _gemini_client():
 def execute_run(
     run_id: str,
     ordered_models: list[PromptModel],
+    preloaded_outputs: dict[str, str] | None = None,
     on_model_start: Callable[[str], None] | None = None,
     on_model_done: Callable[[ModelRunResult], None] | None = None,
 ) -> list[ModelRunResult]:
@@ -74,6 +75,9 @@ def execute_run(
         The run ID created by db.create_run().
     ordered_models:
         Models sorted by execution_order() — upstream models first.
+    preloaded_outputs:
+        Outputs from a previous run to seed ref() lookups.  Used by
+        ``--select`` so upstream models don't need to be re-executed.
     on_model_start / on_model_done:
         Optional progress callbacks for the CLI layer.
 
@@ -85,6 +89,9 @@ def execute_run(
     # client = _gemini_client()
     client = None
 
+    # Seed model_outputs with any preloaded results from a previous run.
+    model_outputs: dict[str, str] = dict(preloaded_outputs or {})
+
     # Register all models as 'pending' up front (mirrors dbt's deferred state).
     for model in ordered_models:
         db.upsert_model_pending(
@@ -95,11 +102,10 @@ def execute_run(
         )
 
     results: list[ModelRunResult] = []
-    model_outputs: dict[str, str] = {}   # name → llm output (for ref())
     failed_upstream: set[str] = set()
 
     for model in ordered_models:
-        # Skip if any dependency failed
+        # Skip if any dependency failed *in this run* (preloaded deps are fine)
         blocked_by = [d for d in model.depends_on if d in failed_upstream]
         if blocked_by:
             db.mark_model_skipped(run_id, model.name)
