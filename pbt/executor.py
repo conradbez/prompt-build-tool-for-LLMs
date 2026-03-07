@@ -23,7 +23,7 @@ from pbt import db
 from pbt.graph import PromptModel
 from pbt.parser import render_prompt
 
-_DEFAULT_MODEL = "gemini-2.0-flash"
+_DEFAULT_MODEL = "gemini-3-flash-preview"
 
 
 @dataclass
@@ -40,23 +40,22 @@ def _gemini_client():
     # Lazy import so non-LLM commands (pbt ls, pbt show-runs, etc.) work even
     # if the google-generativeai package has environmental issues.
     try:
-        import google.generativeai as genai
+        from google import genai
     except ImportError as exc:
         raise ImportError(
-            "google-generativeai is required to run prompts. "
-            "Install it with: pip install google-generativeai"
+            "google-genai is required to run prompts. "
+            "Install it with: pip install google-genai"
         ) from exc
 
     api_key = os.environ.get("GEMINI_API_KEY")
+
     if not api_key:
         raise EnvironmentError(
             "GEMINI_API_KEY environment variable is not set.\n"
             "Obtain a key at https://aistudio.google.com/app/apikey "
             "and export it:\n\n  export GEMINI_API_KEY=your_key_here"
         )
-    genai.configure(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL", _DEFAULT_MODEL)
-    return genai.GenerativeModel(model_name)
+    return genai.Client(api_key=api_key)
 
 
 def execute_run(
@@ -85,9 +84,7 @@ def execute_run(
     -------
     List of ModelRunResult, one per model.
     """
-    # TODO: re-enable when Gemini call is active
-    # client = _gemini_client()
-    client = None
+    client = _gemini_client()
 
     # Seed model_outputs with any preloaded results from a previous run.
     model_outputs: dict[str, str] = dict(preloaded_outputs or {})
@@ -128,9 +125,9 @@ def execute_run(
         try:
             rendered = render_prompt(model.source, model_outputs)
             t0 = time.monotonic()
-            # TODO: re-enable Gemini call
-            # response = client.generate_content(rendered)
-            llm_output = "LLM response"
+            model_name = os.environ.get("GEMINI_MODEL", _DEFAULT_MODEL)
+            response = client.models.generate_content(model=model_name, contents=rendered)
+            llm_output = response.text
             elapsed_ms = int((time.monotonic() - t0) * 1000)
 
             model_outputs[model.name] = llm_output

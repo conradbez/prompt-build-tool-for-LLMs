@@ -1,0 +1,8 @@
+The following is a generated blog post topic:
+
+{{ ref('topic') }}
+
+Check that the output contains a line starting with "Title:" and a line starting with "Description:".
+If both are present, respond with {"results": "pass"}.
+If either is missing, respond with {"results": "fail"}.
+Respond with JSON only.

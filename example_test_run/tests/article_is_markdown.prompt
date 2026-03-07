@@ -1,0 +1,11 @@
+The following is a generated blog post article:
+
+{{ ref('article') }}
+
+Check that:
+1. The article contains at least one Markdown heading (a line starting with "#").
+2. The article is at least 200 words long.
+
+If both conditions are met, respond with {"results": "pass"}.
+Otherwise respond with {"results": "fail"}.
+Respond with JSON only.

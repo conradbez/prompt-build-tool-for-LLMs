@@ -1,0 +1,8 @@
+The following is a generated blog post outline:
+
+{{ ref('outline') }}
+
+Check that the outline contains at least 4 Markdown headings (lines starting with "##" or "#").
+If it has 4 or more headings, respond with {"results": "pass"}.
+If it has fewer than 4 headings, respond with {"results": "fail"}.
+Respond with JSON only.
