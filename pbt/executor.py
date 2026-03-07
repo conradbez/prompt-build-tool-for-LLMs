@@ -81,7 +81,9 @@ def execute_run(
     -------
     List of ModelRunResult, one per model.
     """
-    client = _gemini_client()
+    # TODO: re-enable when Gemini call is active
+    # client = _gemini_client()
+    client = None
 
     # Register all models as 'pending' up front (mirrors dbt's deferred state).
     for model in ordered_models:
@@ -120,10 +122,10 @@ def execute_run(
         try:
             rendered = render_prompt(model.source, model_outputs)
             t0 = time.monotonic()
-            response = client.generate_content(rendered)
+            # TODO: re-enable Gemini call
+            # response = client.generate_content(rendered)
+            llm_output = "LLM response"
             elapsed_ms = int((time.monotonic() - t0) * 1000)
-
-            llm_output = response.text
 
             model_outputs[model.name] = llm_output
             db.mark_model_success(run_id, model.name, rendered, llm_output)

@@ -13,7 +13,7 @@ model_results
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -201,4 +201,4 @@ def get_latest_runs(limit: int = 10) -> list[sqlite3.Row]:
 # ---------------------------------------------------------------------------
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.utcnow()
