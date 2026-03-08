@@ -1,3 +1,5 @@
+generate_articles_example/*
+
 # pbt runtime artifacts
 .pbt/
 
