@@ -8,27 +8,22 @@ Gemini, and store every input/output in a SQLite database for full auditability.
 
 ---
 
-## Concepts
-
-| pbt concept | dbt analogy |
-|---|---|
-| `.prompt` file | `.sql` model file |
-| `ref('model')` | `{{ ref('model') }}` |
-| `models/` directory | `models/` directory |
-| SQLite `runs` table | dbt `run_results.json` |
-| SQLite `model_results` table | dbt `model` timing artifacts |
-
----
 
 ## Quick start
 
 ### 1. Install
 
 ```bash
-pip install -e .
+pip install prompt-build-tool
 ```
 
-### 2. Set your Gemini API key
+### 2. Generate example
+
+```bash
+pbt init
+```
+
+### 3. Set your Gemini API key
 
 ```bash
 export GEMINI_API_KEY=your_key_here
@@ -36,9 +31,15 @@ export GEMINI_API_KEY=your_key_here
 
 Get a free key at <https://aistudio.google.com/app/apikey>.
 
-### 3. Add prompt models
+### 4. Run
 
-Create a `models/` directory and write `.prompt` files:
+```bash
+pbt run
+```
+
+### 5. Extend prompt models
+
+In the `models/` directory write `.prompt` files:
 
 ```
 models/
@@ -70,13 +71,21 @@ Context from previous analysis:
 {{ ref('initial_analysis') }}
 ```
 
-### 4. Run
+---
 
-```bash
-pbt run
-```
+
+## Concepts (if you are familiar with data build tool)
+
+| pbt concept | dbt analogy |
+|---|---|
+| `.prompt` file | `.sql` model file |
+| `ref('model')` | `{{ ref('model') }}` |
+| `models/` directory | `models/` directory |
+| SQLite `runs` table | dbt `run_results.json` |
+| SQLite `model_results` table | dbt `model` timing artifacts |
 
 ---
+
 
 ## Commands
 
@@ -85,35 +94,8 @@ pbt run
 Execute all prompt models in dependency order.
 
 ```
-pbt run [OPTIONS]
+pbt run
 
-Options:
-  --models-dir TEXT       Directory containing *.prompt files  [default: models]
-  --select / -s MODEL     Run only these models (and their dependencies).
-                          Repeatable: -s outline -s article
-  --promptdata KEY=VALUE  Inject a variable via promptdata() into every template.
-                          Repeatable: --promptdata country=USA --promptdata tone=formal
-  --promptfile NAME=PATH  Provide a file for models that declare it in config.
-                          Repeatable: --promptfile doc=report.pdf --promptfile img=chart.png
-  --validation-dir TEXT   Directory with per-model validation Python files  [default: validation]
-  --no-color              Disable rich color output
-```
-
-Example output:
-
-```
-─────────────────── pbt run ───────────────────
-  Run ID  : 3f2a1b4c-...
-  Models  : 3
-
-  [1/3] topic   … OK (1 204 ms)
-  [2/3] outline … OK (2 891 ms)
-  [3/3] article … OK (5 102 ms)
-
-────────────────────────────────────────────────
-  Done  : 3 succeeded
-  Run ID: 3f2a1b4c-...
-  DB    : .pbt/pbt.db
 ```
 
 ### `pbt ls`
@@ -140,69 +122,6 @@ Run `tests/*.prompt` files against the latest run's outputs. Each test passes wh
 
 ```bash
 pbt test
-pbt test --run-id <run_id>
-```
-
-### `pbt show-runs`
-
-Show recent run history from the SQLite store.
-
-```bash
-pbt show-runs --limit 20
-```
-
-### `pbt show-result MODEL_NAME`
-
-Print the stored input/output for a model.
-
-```bash
-pbt show-result article              # latest run
-pbt show-result article --show all   # rendered prompt + LLM output
-pbt show-result article --run-id <run_id>
-```
-
----
-
-## SQLite schema
-
-All results are stored in `.pbt/pbt.db`.
-
-### `runs`
-
-One row per `pbt run` invocation.
-
-| Column | Type | Description |
-|---|---|---|
-| `run_id` | TEXT PK | UUID for the run |
-| `created_at` | TIMESTAMP | When the run started |
-| `status` | TEXT | `running` / `success` / `error` / `partial` |
-| `completed_at` | TIMESTAMP | When the run finished |
-| `model_count` | INTEGER | Number of models in the run |
-| `git_sha` | TEXT | Short git SHA (if in a git repo) |
-
-### `model_results`
-
-One row per model per run.
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | INTEGER PK | Auto-increment |
-| `run_id` | TEXT FK | Parent run |
-| `model_name` | TEXT | Stem of the `.prompt` file |
-| `status` | TEXT | `pending` / `running` / `success` / `error` / `skipped` |
-| `prompt_template` | TEXT | Raw `.prompt` file contents |
-| `prompt_rendered` | TEXT | Fully-rendered prompt sent to the LLM |
-| `llm_output` | TEXT | Raw LLM response text |
-| `started_at` | TIMESTAMP | Execution start |
-| `completed_at` | TIMESTAMP | Execution end |
-| `execution_ms` | INTEGER | Wall-clock time in milliseconds |
-| `error` | TEXT | Error message if status = `error` |
-| `depends_on` | TEXT | JSON list of upstream model names |
-
-Query results directly:
-
-```bash
-sqlite3 .pbt/pbt.db "SELECT model_name, status, execution_ms FROM model_results ORDER BY id DESC LIMIT 10"
 ```
 
 ---
@@ -245,35 +164,40 @@ pbt.run(
 
 Returns a list of `ModelRunResult` objects with fields: `model_name`, `status`, `prompt_rendered`, `llm_output`, `error`, `execution_ms`, `cached`.
 
-### Passing functions inline
+---
+
+## Passing variables to templates (`promptdata()`)
+
+Inject runtime variables into templates using the `promptdata("name")` function — similar to how dbt's `source()` and `ref()` work.
+
+```bash
+pbt run --promptdata tone=formal --promptdata audience=engineers
+```
 
 ```python
-import anthropic
-import pbt
-
-def my_llm(prompt: str) -> str:
-    client = anthropic.Anthropic()
-    msg = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return msg.content[0].text
-
-def my_rag(*args) -> list[str]:
-    query = args[0]
-    # your vector search here
-    return ["Relevant doc 1", "Relevant doc 2"]
-
-results = pbt.run("models", llm_call=my_llm, rag_call=my_rag)
+pbt.run("models", promptdata={"tone": "formal", "audience": "engineers"})
 ```
+
+Access them in any `.prompt` file:
+
+```jinja
+Write an article in a {{ promptdata("tone") }} tone for {{ promptdata("audience") }}.
+
+{% if promptdata("topic") %}
+Topic: {{ promptdata("topic") }}
+{% else %}
+Choose a fascinating topic of your choice.
+{% endif %}
+```
+
+`promptdata("name")` returns `None` if the variable was not provided, so `{% if promptdata("x") %}` is always safe.
 
 ---
 
 ## Customising the LLM backend (`models/client.py`)
 
-By default pbt uses Gemini. To swap in any other LLM, create
-`models/client.py` and define an `llm_call` function:
+Built to be unopinionated on how you do your LLM calls, by default pbt uses Gemini but expects you to implement your 
+own LLM calls (usually 5 lines of code). To do so, edit or create `models/client.py` and define an `llm_call` function:
 
 ```python
 # models/client.py
@@ -297,8 +221,9 @@ pbt raises an error at startup.
 
 ## RAG inside prompts (`models/rag.py`)
 
-pbt exposes a `return_list_RAG_results(*args)` Jinja function in every
-template. To power it, create `models/rag.py` with a `do_RAG` function:
+`pbt` has very little to say about RAG and leaves that up to you - you do this through the 
+`return_list_RAG_results(*args)` function `pbt` give you access to in the .prompt template. `pbt` will pass this call to 
+the  `do_RAG` function you define in  `models/rag.py`:
 
 ```python
 # models/rag.py
@@ -332,33 +257,6 @@ pbt raises a clear error at render time.
 
 ---
 
-## Passing variables to templates (`promptdata()`)
-
-Inject runtime variables into templates using the `promptdata("name")` function — similar to how dbt's `source()` and `ref()` work.
-
-```bash
-pbt run --promptdata tone=formal --promptdata audience=engineers
-```
-
-```python
-pbt.run("models", promptdata={"tone": "formal", "audience": "engineers"})
-```
-
-Access them in any `.prompt` file:
-
-```jinja
-Write an article in a {{ promptdata("tone") }} tone for {{ promptdata("audience") }}.
-
-{% if promptdata("topic") %}
-Topic: {{ promptdata("topic") }}
-{% else %}
-Choose a fascinating topic of your choice.
-{% endif %}
-```
-
-`promptdata("name")` returns `None` if the variable was not provided, so `{% if promptdata("x") %}` is always safe.
-
----
 
 ## Passing files to models (`promptfiles`)
 
@@ -461,57 +359,6 @@ import uvicorn
 app = create_app(models_dir="models")
 uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
-
----
-
-## Project layout
-
-```
-prompt-build-tool-for-LLMs/
-├── pbt/
-│   ├── __init__.py      # Python API (pbt.run)
-│   ├── cli.py           # Click CLI (pbt run, pbt test, pbt docs, …)
-│   ├── graph.py         # DAG builder + topological sort (networkx)
-│   ├── parser.py        # Jinja2 renderer with ref(), config block parsing
-│   ├── executor.py      # LLM calls + SQLite writes + validation hooks
-│   ├── llm.py           # LLM backend resolver (built-in Gemini or models/client.py)
-│   ├── rag.py           # RAG resolver (models/rag.py → do_RAG)
-│   ├── db.py            # SQLite schema + query helpers
-│   ├── docs.py          # HTML report generator (pbt docs)
-│   ├── tester.py        # Test runner (pbt test)
-│   └── validator.py     # Validation framework (validation/*.py)
-├── models/
-│   ├── topic.prompt     # example: no dependencies
-│   ├── outline.prompt   # example: depends on topic
-│   ├── article.prompt   # example: depends on topic + outline
-│   ├── client.py        # optional: custom LLM backend
-│   └── rag.py           # optional: RAG function (do_RAG)
-├── validation/          # optional: per-model validate(prompt, result)->bool files
-├── utils/
-│   └── server/          # FastAPI HTTP server (POST /run, GET /health)
-├── pyproject.toml
-└── README.md
-```
-
----
-
-## Configuration
-
-| Environment variable | Default | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | — | **Required** (unless using `models/client.py`). Gemini API key. |
-| `GEMINI_MODEL` | `gemini-3-flash-preview` | Override the Gemini model. |
-
----
-
-## How dependency resolution works
-
-1. pbt scans every `*.prompt` file for `ref('...')` calls using a regex.
-2. It builds a directed acyclic graph (DAG) with [NetworkX](https://networkx.org/).
-3. A topological sort gives the safe execution order.
-4. If a model errors, all models that depend on it are marked **skipped** rather
-   than failing with a confusing LLM error.
-5. If a cycle is detected, pbt exits immediately with a clear error message.
 
 ---
 
