@@ -39,6 +39,22 @@ _CONFIG_PATTERN = re.compile(
 )
 
 
+class _Empty:
+    """Permissive stub returned by ref() and other functions during config extraction.
+
+    Supports attribute access, item access, iteration, and string conversion so
+    that templates that immediately use the result (e.g. ``{{ ref('x').key }}``)
+    don't raise during the config-extraction dry-render.
+    """
+    def __str__(self):       return ""
+    def __repr__(self):      return ""
+    def __bool__(self):      return False
+    def __len__(self):       return 0
+    def __iter__(self):      return iter([])
+    def __getattr__(self, _): return _Empty()
+    def __getitem__(self, _): return _Empty()
+
+
 def detect_used_promptdata(template_source: str) -> list[str]:
     """
     Return a deduplicated list of variable names referenced via promptdata()
@@ -52,19 +68,8 @@ def detect_used_promptdata(template_source: str) -> list[str]:
     return list(seen)
 
 
-def parse_model_config(template_source: str) -> dict:
-    """
-    Parse an optional config block at the top of a .prompt file.
-
-    Format::
-
-        {# pbt:config
-        output_format: json
-        #}
-
-    Returns a dict of config keys (strings) to values (strings).
-    Returns an empty dict if no config block is found.
-    """
+def _parse_static_config(template_source: str) -> dict[str, str]:
+    """Parse the ``{# pbt:config ... #}`` comment block, returning str→str pairs."""
     match = _CONFIG_PATTERN.search(template_source)
     if not match:
         return {}
@@ -77,6 +82,76 @@ def parse_model_config(template_source: str) -> dict:
             key, _, value = line.partition(":")
             config[key.strip()] = value.strip()
     return config
+
+
+def extract_jinja_config(template_source: str) -> dict[str, str]:
+    """
+    Extract config set via an inline ``{{ config(...) }}`` call in the template.
+
+    The ``config()`` function works like dbt's — call it anywhere in the file::
+
+        {{ config(output_format="json", tags="article") }}
+
+    Values are coerced to strings to match the existing config dict convention.
+    Returns an empty dict if no ``config()`` call is present or if rendering fails.
+    """
+    captured: dict[str, str] = {}
+
+    def _config(**kwargs) -> str:
+        for k, v in kwargs.items():
+            captured[k] = str(v) if not isinstance(v, list) else ",".join(str(i) for i in v)
+        return ""
+
+    env = Environment(
+        keep_trailing_newline=True,
+        undefined=Undefined,   # lenient — missing vars become empty strings
+        block_start_string="{%",
+        block_end_string="%}",
+        variable_start_string="{{",
+        variable_end_string="}}",
+        comment_start_string="{#",
+        comment_end_string="#}",
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+    context: dict = {
+        "config": _config,
+        "ref": lambda *a, **kw: _Empty(),
+        "promptdata": lambda *a, **kw: None,
+        "return_list_RAG_results": lambda *a, **kw: [],
+        "was_skipped": lambda *a, **kw: False,
+        "skip_this_model": "",
+    }
+
+    try:
+        env.from_string(template_source).render(**context)
+    except Exception:
+        pass  # best-effort; partial capture is fine
+
+    return captured
+
+
+def parse_model_config(template_source: str) -> dict:
+    """
+    Parse config for a .prompt file from either source:
+
+    1. A ``{# pbt:config ... #}`` comment block (YAML-like, legacy)::
+
+           {# pbt:config
+           output_format: json
+           #}
+
+    2. An inline ``{{ config(...) }}`` Jinja call (dbt-style)::
+
+           {{ config(output_format="json", tags="article") }}
+
+    Both are merged; the inline ``config()`` call takes precedence on conflicts.
+    Returns a dict of string keys to string values.
+    """
+    merged = _parse_static_config(template_source)
+    merged.update(extract_jinja_config(template_source))
+    return merged
 
 
 def extract_dependencies(template_source: str) -> list[str]:
@@ -145,6 +220,7 @@ def render_prompt(
         "return_list_RAG_results": return_list_RAG_results,
         "was_skipped": was_skipped,
         "skip_this_model": SKIP_SENTINEL,
+        "config": lambda **_: "",   # no-op during real render; config already parsed
     }
 
     template = env.from_string(template_source)
