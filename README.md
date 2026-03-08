@@ -323,7 +323,7 @@ When `output_format: json` is set, pbt validates the LLM output as JSON (strippi
 
 ## Validation (`validation/`)
 
-Create a `validation/` directory with Python files matching model names. Each file must define `validate(prompt, result) -> bool`. If it returns `False`, the model is marked as an error.
+Create a `validation/` directory with Python files matching model names. Each file must define `validate(prompt, result) -> bool`. If it returns `False`, the model is marked as an error and stops it use in downstream models.
 
 ```python
 # validation/article.py
