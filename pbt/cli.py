@@ -747,6 +747,11 @@ Example chain — `models/topic.prompt` → `models/article.prompt` → `models/
     Summarise this article in 3 bullet points:
     {{ ref('article') }}
 
+## client.py
+Add a `models/client.py` to configure which LLM to call. It must expose a
+`llm_call(prompt: str) -> str` function. See the scaffolded example for a
+Gemini implementation.
+
 Run with: `pbt run` or `pbt run --promptdata topic="your topic"`
 """,
     "validation/basic-usage.md": """\
