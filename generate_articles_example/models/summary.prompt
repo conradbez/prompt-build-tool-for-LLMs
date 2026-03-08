@@ -1,0 +1,3 @@
+Summarise the following article in 3 bullet points. Be concise.
+
+{{ ref('article') }}

@@ -18,7 +18,7 @@ from typing import Iterator
 
 import networkx as nx
 
-from pbt.parser import extract_dependencies, parse_model_config, detect_used_vars
+from pbt.parser import extract_dependencies, parse_model_config, detect_used_promptdata
 
 
 @dataclass
@@ -28,7 +28,7 @@ class PromptModel:
     source: str        # raw file contents
     depends_on: list[str] = field(default_factory=list)
     config: dict = field(default_factory=dict)   # parsed pbt:config block
-    vars_used: list[str] = field(default_factory=list)  # vars.* keys accessed
+    promptdata_used: list[str] = field(default_factory=list)  # promptdata() keys used
 
 
 class CyclicDependencyError(Exception):
@@ -58,14 +58,14 @@ def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
         source = prompt_file.read_text(encoding="utf-8")
         deps = extract_dependencies(source)
         config = parse_model_config(source)
-        vars_used = detect_used_vars(source)
+        promptdata_used = detect_used_promptdata(source)
         models[name] = PromptModel(
             name=name,
             path=prompt_file.resolve(),
             source=source,
             depends_on=deps,
             config=config,
-            vars_used=vars_used,
+            promptdata_used=promptdata_used,
         )
 
     if not models:
@@ -142,14 +142,14 @@ def _lex_topo_sort(dag: nx.DiGraph) -> Iterator[str]:
                 heapq.heappush(heap, successor)
 
 
-def get_dag_vars(models: dict[str, PromptModel]) -> list[str]:
+def get_dag_promptdata(models: dict[str, PromptModel]) -> list[str]:
     """
-    Return a deduplicated list of all ``vars.*`` keys used across every model
-    in the DAG, in first-seen (topological) order.
+    Return a deduplicated list of all promptdata() keys used across every model
+    in the DAG, in first-seen order.
     """
     seen: dict[str, None] = {}
     for model in models.values():
-        for v in model.vars_used:
+        for v in model.promptdata_used:
             seen[v] = None
     return list(seen)
 

@@ -36,20 +36,20 @@ def _serialise(outputs: dict) -> tuple[dict[str, Any], list[str]]:
     return serialised, errors
 
 
-def _build_run_endpoint(models_dir: str, validation_dir: str, dag_vars: list[str]):
+def _build_run_endpoint(models_dir: str, validation_dir: str, dag_promptdata: list[str]):
     """
     Dynamically build a /run function whose signature lists each detected
-    var as an optional query parameter. FastAPI reads __signature__ to
-    generate the OpenAPI schema, so every var shows up in /docs.
+    promptdata() key as an optional query parameter. FastAPI reads __signature__
+    to generate the OpenAPI schema, so every key shows up in /docs.
     """
 
-    # The actual handler — receives vars as keyword arguments
+    # The actual handler — receives promptdata values as keyword arguments
     def _run(**kwargs: Any) -> RunResponse:
-        provided_vars = {k: v for k, v in kwargs.items() if v is not None}
+        provided = {k: v for k, v in kwargs.items() if v is not None}
         try:
             outputs = pbt.run(
                 models_dir=models_dir,
-                vars=provided_vars or None,
+                promptdata=provided or None,
                 validation_dir=validation_dir,
                 verbose=False,
             )
@@ -58,25 +58,25 @@ def _build_run_endpoint(models_dir: str, validation_dir: str, dag_vars: list[str
         serialised, errors = _serialise(outputs)
         return RunResponse(outputs=serialised, errors=errors)
 
-    # Build a signature: one Optional[str] query param per detected var
+    # Build a signature: one Optional[str] query param per detected promptdata key
     params = [
         inspect.Parameter(
-            var_name,
+            key_name,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Query(None, description=f"Template variable: `{{{{ vars.{var_name} }}}}`"),
+            default=Query(None, description=f"Template variable: `{{{{ promptdata('{key_name}') }}}}`"),
             annotation=Optional[str],
         )
-        for var_name in dag_vars
+        for key_name in dag_promptdata
     ]
     _run.__signature__ = inspect.Signature(params)
 
     description = (
         "Run all pbt prompt models and return their outputs.\n\n"
         + (
-            "**Detected template variables** (from `vars.*` usage in `.prompt` files):\n"
-            + "\n".join(f"- `{v}`" for v in dag_vars)
-            if dag_vars
-            else "_No template variables detected in current models._"
+            "**Detected template variables** (from `promptdata()` usage in `.prompt` files):\n"
+            + "\n".join(f"- `{v}`" for v in dag_promptdata)
+            if dag_promptdata
+            else "_No promptdata() variables detected in current models._"
         )
     )
     _run.__doc__ = description
@@ -94,19 +94,19 @@ def create_app(
     The /run endpoint's query parameters are built dynamically from the vars
     detected across all .prompt files via VarSpy dry-render at startup.
     """
-    # Detect vars at startup so the OpenAPI schema is accurate
+    # Detect promptdata() keys at startup so the OpenAPI schema is accurate
     try:
-        from pbt.graph import load_models, get_dag_vars
+        from pbt.graph import load_models, get_dag_promptdata
         models = load_models(models_dir)
-        dag_vars = get_dag_vars(models)
+        dag_promptdata = get_dag_promptdata(models)
     except Exception:
-        dag_vars = []
+        dag_promptdata = []
 
     app = FastAPI(
         title="pbt server",
         description=(
             "Run pbt prompt models via HTTP. "
-            "Query parameters on `/run` are auto-generated from `vars.*` "
+            "Query parameters on `/run` are auto-generated from `promptdata()` "
             "usage detected in your `.prompt` files."
         ),
         version=pbt.__version__,
@@ -114,11 +114,11 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok", "pbt_version": pbt.__version__, "dag_vars": dag_vars}
+        return {"status": "ok", "pbt_version": pbt.__version__, "dag_promptdata": dag_promptdata}
 
     # POST /run — generic JSON body (for programmatic use)
     class RunRequest(BaseModel):
-        vars: dict[str, Any] | None = None
+        promptdata: dict[str, Any] | None = None
         select: list[str] | None = None
 
     @app.post("/run", response_model=RunResponse, summary="Run models (JSON body)")
@@ -128,7 +128,7 @@ def create_app(
             outputs = pbt.run(
                 models_dir=models_dir,
                 select=request.select,
-                vars=request.vars,
+                promptdata=request.promptdata,
                 validation_dir=validation_dir,
                 verbose=False,
             )
@@ -137,8 +137,8 @@ def create_app(
         serialised, errors = _serialise(outputs)
         return RunResponse(outputs=serialised, errors=errors)
 
-    # GET /run — dynamic query params per detected var (for the docs UI)
-    run_get = _build_run_endpoint(models_dir, validation_dir, dag_vars)
+    # GET /run — dynamic query params per detected promptdata key (for the docs UI)
+    run_get = _build_run_endpoint(models_dir, validation_dir, dag_promptdata)
     app.get("/run", response_model=RunResponse, summary="Run models (query params)")(run_get)
 
     return app

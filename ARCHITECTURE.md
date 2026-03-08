@@ -30,22 +30,21 @@ pbt/
 
 ---
 
-## VarSpy: static var detection
+## Static promptdata() detection
 
-Before any run, pbt dry-renders every template to discover which `vars.*` keys it uses — no LLM calls, just Jinja rendering with a spy dict.
+Before any run, pbt scans each template with a regex to discover which `promptdata()` keys it uses — no Jinja rendering needed.
 
 ```python
-class VarSpy(dict):
-    def __getitem__(self, key):
-        self._accessed.append(key)
-        return f"__var_{key}__"   # truthy dummy — keeps rendering going
-    def __contains__(self, key):
-        return True
+_PROMPTDATA_PATTERN = re.compile(r"""\bpromptdata\(\s*['"](\w+)['"]\s*\)""")
+
+def detect_used_promptdata(template_source: str) -> list[str]:
+    seen: dict[str, None] = {}
+    for match in _PROMPTDATA_PATTERN.finditer(template_source):
+        seen[match.group(1)] = None
+    return list(seen)
 ```
 
-`ref()` uses a `defaultdict` returning dummy strings. Errors are swallowed — keys accessed up to the error are still captured. Results stored in `PromptModel.vars_used`, shown in `pbt ls`, and warned about in `pbt run` if not provided.
-
-**Known limitation:** only one branch of a conditional is traversed. `{% if vars.flag %}{{ vars.a }}{% else %}{{ vars.b }}{% endif %}` — only `flag` and `a` are detected.
+Results stored in `PromptModel.promptdata_used`, shown in `pbt ls`, and warned about in `pbt run` if not provided. This is simpler and more reliable than the previous VarSpy dry-render approach — all branches of conditionals are detected since it's a static scan.
 
 ---
 

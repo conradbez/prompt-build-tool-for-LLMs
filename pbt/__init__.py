@@ -21,7 +21,7 @@ def run(
     llm_call: Callable[[str], str] | None = None,
     rag_call: Callable[..., list] | None = None,
     verbose: bool = True,
-    vars: dict | None = None,
+    promptdata: dict | None = None,
     validation_dir: str = "validation",
 ):
     """
@@ -43,9 +43,9 @@ def run(
         Falls back to ``models/rag.py::do_RAG`` if present.
     verbose:
         Print a dbt-style progress log to stdout (default: True).
-    vars:
-        Optional dict of variables injected into every Jinja2 template context.
-        Accessible as ``{{ var_name }}`` in .prompt files.
+    promptdata:
+        Optional dict of runtime variables. Access them in templates via
+        ``{{ promptdata('key') }}``.
 
     Returns
     -------
@@ -184,7 +184,7 @@ def run(
         rag_call=rag_call,
         on_model_start=on_start,
         on_model_done=on_done,
-        vars=vars,
+        promptdata=promptdata,
         validators=validators or None,
     )
 

@@ -28,7 +28,7 @@ from pbt.graph import (
     execution_order,
     build_dag,
     compute_dag_hash,
-    get_dag_vars,
+    get_dag_promptdata,
     CyclicDependencyError,
     UnknownModelError,
 )
@@ -80,12 +80,12 @@ def main() -> None:
     help="Disable rich color output.",
 )
 @click.option(
-    "--var",
+    "--promptdata",
     multiple=True,
     metavar="KEY=VALUE",
     help=(
-        "Inject a variable into every Jinja2 template. "
-        "Repeatable: --var country=USA --var max_tokens=200"
+        "Inject a variable into every Jinja2 template via promptdata(). "
+        "Repeatable: --promptdata country=USA --promptdata tone=formal"
     ),
 )
 @click.option(
@@ -94,18 +94,18 @@ def main() -> None:
     show_default=True,
     help="Directory containing per-model validation Python files.",
 )
-def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str, ...], validation_dir: str) -> None:
+def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tuple[str, ...], validation_dir: str) -> None:
     """Execute all prompt models in dependency order."""
     c = Console(highlight=not no_color)
 
-    # Parse --var KEY=VALUE pairs into a dict
-    extra_vars: dict[str, str] = {}
-    for v in var:
+    # Parse --promptdata KEY=VALUE pairs into a dict
+    promptdata_vars: dict[str, str] = {}
+    for v in promptdata:
         if "=" not in v:
-            err_console.print(f"[red]Error:[/red] --var must be KEY=VALUE, got: {v!r}")
+            err_console.print(f"[red]Error:[/red] --promptdata must be KEY=VALUE, got: {v!r}")
             sys.exit(1)
         k, _, val = v.partition("=")
-        extra_vars[k] = val
+        promptdata_vars[k] = val
 
     db.init_db()
 
@@ -247,16 +247,16 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str
         c.print(f"  Validators: {sorted(validators.keys())}")
         c.print()
 
-    # Warn about vars used in templates but not provided
-    dag_vars = get_dag_vars(all_models)
-    missing_vars = [v for v in dag_vars if v not in extra_vars]
-    if dag_vars:
-        c.print(f"  Vars used: {dag_vars}")
-    if extra_vars:
-        c.print(f"  Vars set : {list(extra_vars.keys())}")
-    if missing_vars:
-        c.print(f"  [yellow]Warning: vars not provided: {missing_vars}[/yellow]")
-    if dag_vars or extra_vars:
+    # Warn about promptdata() vars used in templates but not provided
+    dag_promptdata = get_dag_promptdata(all_models)
+    missing_promptdata = [v for v in dag_promptdata if v not in promptdata_vars]
+    if dag_promptdata:
+        c.print(f"  promptdata() used: {dag_promptdata}")
+    if promptdata_vars:
+        c.print(f"  promptdata() set : {list(promptdata_vars.keys())}")
+    if missing_promptdata:
+        c.print(f"  [yellow]Warning: promptdata() vars not provided: {missing_promptdata}[/yellow]")
+    if dag_promptdata or promptdata_vars:
         c.print()
 
     try:
@@ -268,7 +268,7 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str
             on_model_done=on_done,
             llm_call=llm_call,
             rag_call=rag_call,
-            vars=extra_vars or None,
+            promptdata=promptdata_vars or None,
             validators=validators or None,
         )
     except EnvironmentError as exc:
@@ -479,13 +479,13 @@ def list_models(models_dir: str) -> None:
     table.add_column("#", style="dim", justify="right")
     table.add_column("Model", style="bold cyan")
     table.add_column("Depends on")
-    table.add_column("Vars used", style="dim")
+    table.add_column("promptdata() used", style="dim")
     table.add_column("File", style="dim")
 
     for i, model in enumerate(ordered, 1):
         deps = ", ".join(model.depends_on) if model.depends_on else "[dim]—[/dim]"
-        vars_str = ", ".join(model.vars_used) if model.vars_used else "[dim]—[/dim]"
-        table.add_row(str(i), model.name, deps, vars_str, str(model.path))
+        promptdata_str = ", ".join(model.promptdata_used) if model.promptdata_used else "[dim]—[/dim]"
+        table.add_row(str(i), model.name, deps, promptdata_str, str(model.path))
 
     console.print(table)
 
@@ -652,9 +652,9 @@ def docs(models_dir: str, output: str, open_browser: bool) -> None:
 
 _INIT_FILES = {
     "models/article.prompt": """\
-{# Generate an article on a topic. Pass --var topic=... or leave blank for a generic article. #}
-{% if vars.topic %}
-Write a detailed, engaging article about: {{ vars.topic }}
+{# Generate an article on a topic. Pass --promptdata topic=... or leave blank for a generic article. #}
+{% if promptdata("topic") %}
+Write a detailed, engaging article about: {{ promptdata("topic") }}
 {% else %}
 Write a detailed, engaging article about a fascinating topic of your choice.
 {% endif %}
@@ -715,7 +715,7 @@ def init(project_name: str, force: bool) -> None:
         console.print(f"  [dim]skipped[/dim]  {f}  [dim](use --force to overwrite)[/dim]")
 
     if created:
-        console.print(f"\nRun [bold cyan]cd {project_name} && pbt run[/bold cyan], or [bold cyan]pbt run --var topic='your topic'[/bold cyan]")
+        console.print(f"\nRun [bold cyan]cd {project_name} && pbt run[/bold cyan], or [bold cyan]pbt run --promptdata topic='your topic'[/bold cyan]")
 
 
 # ---------------------------------------------------------------------------

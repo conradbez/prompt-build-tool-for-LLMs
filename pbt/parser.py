@@ -1,14 +1,19 @@
 """
-Jinja2-based prompt parser with ref() support.
+Jinja2-based prompt parser with ref() and promptdata() support.
 
-Special template function
--------------------------
+Special template functions
+--------------------------
 {{ ref('model_name') }}
     Injects the LLM output of another model into this prompt.
     pbt uses calls to ref() to build the dependency graph before execution.
 
+{{ promptdata('var_name') }}
+    Injects a runtime variable passed via --promptdata or the Python API.
+    Returns None if the variable was not provided (so {% if promptdata('x') %}
+    works safely).
+
 All standard Jinja2 features (loops, conditionals, filters, macros, etc.)
-are available in addition to ref().
+are available in addition to ref() and promptdata().
 """
 
 import re
@@ -24,70 +29,27 @@ _SKIP_OUTPUT  = "SKIPPED THIS MODEL"
 # Used for static dependency extraction WITHOUT executing the template.
 _REF_PATTERN = re.compile(r"""\bref\(\s*['"](\w+)['"]\s*\)""")
 
+# Regex that finds every promptdata('...') or promptdata("...") call.
+# Used for static detection WITHOUT executing the template.
+_PROMPTDATA_PATTERN = re.compile(r"""\bpromptdata\(\s*['"](\w+)['"]\s*\)""")
+
 # Regex to extract pbt config block: {# pbt:config ... #} at the top of file.
 _CONFIG_PATTERN = re.compile(
     r"^\s*\{#\s*pbt:config\s*(.*?)\s*#\}", re.DOTALL
 )
 
 
-class VarSpy(dict):
+def detect_used_promptdata(template_source: str) -> list[str]:
     """
-    A dict that records every key accessed via [] or .get().
-    Used during a dry render to discover which vars a template uses.
-    Returns a truthy dummy string for every key so rendering doesn't abort.
+    Return a deduplicated list of variable names referenced via promptdata()
+    in *template_source*, in first-seen order.
+
+    This is a static scan — no Jinja rendering happens here.
     """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._accessed: list[str] = []
-
-    def __getitem__(self, key: str) -> str:
-        self._accessed.append(key)
-        return f"__var_{key}__"
-
-    def __contains__(self, key: object) -> bool:
-        return True  # vars.key always "exists" during dry render
-
-    def get(self, key: str, default=None) -> str:  # type: ignore[override]
-        self._accessed.append(key)
-        return f"__var_{key}__"
-
-    @property
-    def accessed(self) -> list[str]:
-        """Deduplicated list of accessed keys in first-seen order."""
-        return list(dict.fromkeys(self._accessed))
-
-
-def detect_used_vars(template_source: str) -> list[str]:
-    """
-    Dry-render *template_source* with a VarSpy and dummy upstream outputs
-    to discover which ``vars.*`` keys the template accesses.
-
-    Best-effort: if the template errors mid-render, keys accessed up to that
-    point are still returned. Control-flow branches not taken (e.g. the
-    ``{% else %}`` side of a conditional that depends on a var) are not
-    traversed — this is an inherent limitation of dynamic templates.
-    """
-    from collections import defaultdict
-
-    env = _make_env()
-    spy = VarSpy()
-    dummy_outputs: dict = defaultdict(lambda: "dummy_output")
-
-    context = {
-        "ref": lambda name: dummy_outputs[name],
-        "return_list_RAG_results": lambda *_: ["dummy_rag_result"],
-        "was_skipped": lambda _: False,
-        "skip_this_model": SKIP_SENTINEL,
-        "vars": spy,
-    }
-
-    try:
-        env.from_string(template_source).render(**context)
-    except Exception:
-        pass  # partial render still captures vars accessed so far
-
-    return spy.accessed
+    seen: dict[str, None] = {}
+    for match in _PROMPTDATA_PATTERN.finditer(template_source):
+        seen[match.group(1)] = None
+    return list(seen)
 
 
 def parse_model_config(template_source: str) -> dict:
@@ -133,7 +95,7 @@ def extract_dependencies(template_source: str) -> list[str]:
 def render_prompt(
     template_source: str,
     model_outputs: dict[str, str],
-    extra_vars: dict | None = None,
+    promptdata: dict | None = None,
     rag_call: "Callable[..., list[str]] | None" = None,
 ) -> str:
     """
@@ -145,13 +107,16 @@ def render_prompt(
         Raw contents of a .prompt file.
     model_outputs:
         Mapping of model_name → LLM output text for all upstream models.
-    extra_vars:
-        Additional variables injected into the template context.
+    promptdata:
+        Optional dict of runtime variables, injected via promptdata("name").
+        Returns None for missing keys so {% if promptdata('x') %} is safe.
 
     The ``ref(model_name)`` function is available inside templates and
     returns the corresponding entry from *model_outputs*.
+    The ``promptdata(name)`` function returns runtime variables.
     """
     env = _make_env()
+    _promptdata = promptdata or {}
 
     def ref(model_name: str) -> str:
         if model_name not in model_outputs:
@@ -160,6 +125,9 @@ def render_prompt(
                 "This is likely a missing dependency or execution-order bug."
             )
         return model_outputs[model_name]
+
+    def _promptdata_fn(name: str):
+        return _promptdata.get(name)
 
     def return_list_RAG_results(*args) -> list[str]:
         if rag_call is None:
@@ -173,10 +141,10 @@ def render_prompt(
 
     context: dict = {
         "ref": ref,
+        "promptdata": _promptdata_fn,
         "return_list_RAG_results": return_list_RAG_results,
         "was_skipped": was_skipped,
         "skip_this_model": SKIP_SENTINEL,
-        "vars": extra_vars or {},
     }
 
     template = env.from_string(template_source)

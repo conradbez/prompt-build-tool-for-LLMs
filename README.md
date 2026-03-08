@@ -91,8 +91,8 @@ Options:
   --models-dir TEXT       Directory containing *.prompt files  [default: models]
   --select / -s MODEL     Run only these models (and their dependencies).
                           Repeatable: -s outline -s article
-  --var KEY=VALUE         Inject a variable into every Jinja2 template.
-                          Repeatable: --var country=USA --var tone=formal
+  --promptdata KEY=VALUE  Inject a variable via promptdata() into every template.
+                          Repeatable: --promptdata country=USA --promptdata tone=formal
   --validation-dir TEXT   Directory with per-model validation Python files  [default: validation]
   --no-color              Disable rich color output
 ```
@@ -226,7 +226,7 @@ pbt.run(
     select=["article"],        # optional: run only these models
     llm_call=my_llm_fn,        # optional: custom LLM backend
     rag_call=my_rag_fn,        # optional: custom RAG function
-    vars={"tone": "formal"},   # optional: variables injected into every template
+    promptdata={"tone": "formal"},   # optional: variables injected via promptdata()
     validation_dir="validation", # optional: per-model validation functions
 )
 ```
@@ -237,7 +237,7 @@ pbt.run(
 | `select` | `list[str] \| None` | Run only these models (upstream outputs loaded from DB) |
 | `llm_call` | `(prompt: str) -> str \| None` | Override LLM backend. Falls back to `models/client.py` then Gemini |
 | `rag_call` | `(*args) -> list \| str \| None` | Override RAG function. Falls back to `models/rag.py::do_RAG` |
-| `vars` | `dict \| None` | Variables injected into every Jinja2 template as `{{ key }}` |
+| `promptdata` | `dict \| None` | Variables injected into every template, accessed via `{{ promptdata('key') }}` |
 | `validation_dir` | `str` | Directory with per-model `validate(prompt, result) -> bool` files |
 
 Returns a list of `ModelRunResult` objects with fields: `model_name`, `status`, `prompt_rendered`, `llm_output`, `error`, `execution_ms`, `cached`.
@@ -329,19 +329,31 @@ pbt raises a clear error at render time.
 
 ---
 
-## Passing variables to templates (`--var`)
+## Passing variables to templates (`promptdata()`)
 
-Inject variables into every Jinja2 template from the CLI or Python API:
+Inject runtime variables into templates using the `promptdata("name")` function — similar to how dbt's `source()` and `ref()` work.
 
 ```bash
-pbt run --var tone=formal --var audience=engineers
+pbt run --promptdata tone=formal --promptdata audience=engineers
 ```
 
 ```python
-pbt.run("models", vars={"tone": "formal", "audience": "engineers"})
+pbt.run("models", promptdata={"tone": "formal", "audience": "engineers"})
 ```
 
-Access them in any `.prompt` file via `{{ vars.tone }}`, `{{ vars.audience }}`, etc.
+Access them in any `.prompt` file:
+
+```jinja
+Write an article in a {{ promptdata("tone") }} tone for {{ promptdata("audience") }}.
+
+{% if promptdata("topic") %}
+Topic: {{ promptdata("topic") }}
+{% else %}
+Choose a fascinating topic of your choice.
+{% endif %}
+```
+
+`promptdata("name")` returns `None` if the variable was not provided, so `{% if promptdata("x") %}` is always safe.
 
 ---
 
@@ -383,7 +395,7 @@ python -m utils.server --models-dir models --port 8000
 ```
 
 ```
-POST /run   body: {"vars": {"tone": "formal"}, "select": ["article"]}
+POST /run   body: {"promptdata": {"tone": "formal"}, "select": ["article"]}
             returns: {"outputs": {"topic": "...", "article": "..."}}
 
 GET  /health
