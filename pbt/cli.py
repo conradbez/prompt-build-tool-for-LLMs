@@ -674,6 +674,17 @@ Does the following text contain at least 3 bullet points (lines starting with - 
 
 Reply with only valid JSON: {"results": "pass"} or {"results": "fail"}.
 """,
+    "models/client.py": """\
+import os
+from google import genai
+
+def llm_call(prompt: str) -> str:
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    return client.models.generate_content(
+        model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+        contents=prompt,
+    ).text
+""",
     "validation/article.py": """\
 def validate(prompt: str, result: str) -> bool:
     \"\"\"Article must be at least 200 characters and contain a markdown header.\"\"\"
