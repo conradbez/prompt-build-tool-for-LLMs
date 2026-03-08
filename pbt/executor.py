@@ -14,6 +14,8 @@ The model can be overridden with GEMINI_MODEL (default: gemini-2.0-flash).
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -23,6 +25,23 @@ from pbt.graph import PromptModel
 from pbt.llm import resolve_llm_call
 from pbt.rag import resolve_rag_call
 from pbt.parser import render_prompt, SKIP_SENTINEL, _SKIP_OUTPUT
+
+_JSON_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+
+
+def _parse_json_output(raw: str) -> dict | list:
+    """Strip optional ```json fences and parse as JSON. Raises ValueError on failure."""
+    stripped = raw.strip()
+    m = _JSON_FENCE.match(stripped)
+    if m:
+        stripped = m.group(1)
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Model declared output_format: json but LLM returned invalid JSON: {exc}\n"
+            f"Output was: {raw!r}"
+        ) from exc
 
 
 @dataclass
@@ -122,7 +141,17 @@ def execute_run(
                 llm_output = llm_call(rendered)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
 
-            model_outputs[model.name] = llm_output
+            # If model declares output_format: json, validate and parse output.
+            # Downstream ref() will receive a Python dict/list instead of a string.
+            output_format = model.config.get("output_format", "text")
+            if llm_output != _SKIP_OUTPUT and output_format == "json":
+                parsed = _parse_json_output(llm_output)
+                model_outputs[model.name] = parsed
+                # Normalise to canonical JSON for DB storage
+                llm_output = json.dumps(parsed)
+            else:
+                model_outputs[model.name] = llm_output
+
             db.mark_model_success(run_id, model.name, rendered, llm_output)
 
             result = ModelRunResult(

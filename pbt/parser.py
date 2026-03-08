@@ -24,6 +24,38 @@ _SKIP_OUTPUT  = "SKIPPED THIS MODEL"
 # Used for static dependency extraction WITHOUT executing the template.
 _REF_PATTERN = re.compile(r"""\bref\(\s*['"](\w+)['"]\s*\)""")
 
+# Regex to extract pbt config block: {# pbt:config ... #} at the top of file.
+_CONFIG_PATTERN = re.compile(
+    r"^\s*\{#\s*pbt:config\s*(.*?)\s*#\}", re.DOTALL
+)
+
+
+def parse_model_config(template_source: str) -> dict:
+    """
+    Parse an optional config block at the top of a .prompt file.
+
+    Format::
+
+        {# pbt:config
+        output_format: json
+        #}
+
+    Returns a dict of config keys (strings) to values (strings).
+    Returns an empty dict if no config block is found.
+    """
+    match = _CONFIG_PATTERN.search(template_source)
+    if not match:
+        return {}
+    config: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            key, _, value = line.partition(":")
+            config[key.strip()] = value.strip()
+    return config
+
 
 def extract_dependencies(template_source: str) -> list[str]:
     """

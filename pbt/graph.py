@@ -18,7 +18,7 @@ from typing import Iterator
 
 import networkx as nx
 
-from pbt.parser import extract_dependencies
+from pbt.parser import extract_dependencies, parse_model_config
 
 
 @dataclass
@@ -27,6 +27,7 @@ class PromptModel:
     path: Path         # absolute path to the .prompt file
     source: str        # raw file contents
     depends_on: list[str] = field(default_factory=list)
+    config: dict = field(default_factory=dict)  # parsed pbt:config block
 
 
 class CyclicDependencyError(Exception):
@@ -55,11 +56,13 @@ def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
         name = prompt_file.stem
         source = prompt_file.read_text(encoding="utf-8")
         deps = extract_dependencies(source)
+        config = parse_model_config(source)
         models[name] = PromptModel(
             name=name,
             path=prompt_file.resolve(),
             source=source,
             depends_on=deps,
+            config=config,
         )
 
     if not models:
