@@ -234,6 +234,15 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str
         db.finish_run(run_id, "error")
         sys.exit(1)
 
+    orphan_validators = [v for v in validators if v not in all_models]
+    if orphan_validators:
+        err_console.print(
+            f"[red]Error:[/red] validation files have no matching model: {orphan_validators}\n"
+            f"Rename or remove them to match a .prompt file."
+        )
+        db.finish_run(run_id, "error")
+        sys.exit(1)
+
     if validators:
         c.print(f"  Validators: {sorted(validators.keys())}")
         c.print()
@@ -635,6 +644,64 @@ def docs(models_dir: str, output: str, open_browser: bool) -> None:
 
     if open_browser:
         webbrowser.open(output_path.resolve().as_uri())
+
+
+# ---------------------------------------------------------------------------
+# pbt serve
+# ---------------------------------------------------------------------------
+
+@main.command("serve")
+@click.option("--models-dir", default="models", show_default=True)
+@click.option("--validation-dir", default="validation", show_default=True)
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8000, show_default=True)
+@click.option("--docs-output", default=".pbt/docs/index.html", show_default=True,
+              help="Path to the pre-generated pbt docs HTML file.")
+def serve(models_dir: str, validation_dir: str, host: str, port: int, docs_output: str) -> None:
+    """Start the pbt HTTP server and open the docs page in the browser."""
+    import threading
+    import time
+    import webbrowser
+
+    try:
+        import uvicorn
+    except ImportError:
+        err_console.print("[red]Error:[/red] uvicorn is required. Install with: pip install uvicorn")
+        sys.exit(1)
+
+    try:
+        from utils.server.app import create_app
+    except ImportError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+
+    app = create_app(models_dir=models_dir, validation_dir=validation_dir)
+
+    # Mount the pre-generated docs HTML as a static route if the file exists
+    docs_path = Path(docs_output)
+    if docs_path.exists():
+        from fastapi.responses import HTMLResponse
+        html_content = docs_path.read_text(encoding="utf-8")
+
+        @app.get("/docs-report", response_class=HTMLResponse)
+        def docs_report():  # noqa: ANN201
+            return html_content
+
+        docs_url = f"http://{host}:{port}/docs-report"
+        console.print(f"[dim]Docs report:[/dim] {docs_url}")
+    else:
+        docs_url = f"http://{host}:{port}/docs"
+        console.print(f"[dim]No docs file found at {docs_output}, opening API docs.[/dim]")
+
+    console.print(f"[bold cyan]pbt serve[/bold cyan] → http://{host}:{port}")
+
+    def _open_browser():
+        time.sleep(0.8)  # give uvicorn a moment to start
+        webbrowser.open(docs_url)
+
+    threading.Thread(target=_open_browser, daemon=True).start()
+
+    uvicorn.run(app, host=host, port=port)
 
 
 # ---------------------------------------------------------------------------
