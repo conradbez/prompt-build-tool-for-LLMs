@@ -732,8 +732,7 @@ Write your prompts here. Each `.prompt` file defines one step in your pipeline.
 You can:
 - Reference other prompt outputs:  `{{ ref('other_prompt_name') }}`
 - Access passed-in data:           `{{ promptdata("key") }}`
-- Include files/data:              `{{ file("path/to/file.txt") }}`
-- Configure output structure in the prompt (e.g. ask for JSON)
+- Configure model behaviour:       `{{ config(output_format="json") }}`
 
 Example chain — `models/topic.prompt` → `models/article.prompt` → `models/summary.prompt`:
 
@@ -744,7 +743,8 @@ Example chain — `models/topic.prompt` → `models/article.prompt` → `models/
     Write a detailed article about: {{ ref('topic') }}
 
     # summary.prompt
-    Summarise this article in 3 bullet points:
+    {{ config(output_format="json") }}
+    Summarise this article in 3 bullet points. Return JSON: {"bullets": ["...", "...", "..."]}.
     {{ ref('article') }}
 
 ## client.py

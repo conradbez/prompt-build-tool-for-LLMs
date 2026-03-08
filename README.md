@@ -260,23 +260,19 @@ pbt raises a clear error at render time.
 
 ## Passing files to models (`promptfiles`)
 
-Models can receive files (PDFs, images, etc.) alongside the text prompt. Declare the files a model needs in its `{# pbt:config #}` block, then provide the actual paths at runtime.
+Models can receive files (PDFs, images, etc.) alongside the text prompt. Declare the files a model needs via `config()`, then provide the actual paths at runtime.
 
-**1. Declare in config block:**
+**1. Declare in config:**
 
 ```jinja
-{# pbt:config
-promptfiles: my_document
-#}
+{{ config(promptfiles="my_document") }}
 Summarise the attached document in 3 bullet points.
 ```
 
 Multiple files are comma-separated:
 
 ```jinja
-{# pbt:config
-promptfiles: report, chart_image
-#}
+{{ config(promptfiles="report,chart_image") }}
 ```
 
 **2. Provide file paths at runtime:**
@@ -306,14 +302,12 @@ pbt checks the function signature at runtime — if `files` is not in the signat
 
 ---
 
-## Output format config (`{# pbt:config #}`)
+## Output format config (`config()`)
 
-Add an optional config block at the top of a `.prompt` file to declare the expected output format:
+Call `config()` at the top of a `.prompt` file to declare the expected output format:
 
 ```jinja
-{# pbt:config
-output_format: json
-#}
+{{ config(output_format="json") }}
 Return a JSON object with keys "title" and "summary".
 ```
 
