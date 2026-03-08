@@ -337,7 +337,7 @@ Run with `pbt run` — validation fires automatically after each model's LLM cal
 
 ## HTTP server (`utils/server`)
 
-Run pbt over HTTP with a lightweight FastAPI server (requires `pip install fastapi uvicorn`):
+Deploy over to run and return LLM response to .prompt pipeline over HTTP. Runs a lightweight FastAPI server and manages pipeline execution and return (requires `pip install fastapi uvicorn`):
 
 ```bash
 python -m utils.server --models-dir models --port 8000
