@@ -74,9 +74,27 @@ def main() -> None:
     default=False,
     help="Disable rich color output.",
 )
-def run(models_dir: str, select: tuple[str, ...], no_color: bool) -> None:
+@click.option(
+    "--var",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=(
+        "Inject a variable into every Jinja2 template. "
+        "Repeatable: --var country=USA --var max_tokens=200"
+    ),
+)
+def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str, ...]) -> None:
     """Execute all prompt models in dependency order."""
     c = Console(highlight=not no_color)
+
+    # Parse --var KEY=VALUE pairs into a dict
+    extra_vars: dict[str, str] = {}
+    for v in var:
+        if "=" not in v:
+            err_console.print(f"[red]Error:[/red] --var must be KEY=VALUE, got: {v!r}")
+            sys.exit(1)
+        k, _, val = v.partition("=")
+        extra_vars[k] = val
 
     db.init_db()
 
@@ -188,6 +206,10 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool) -> None:
             c.print("[red]ERROR[/red]")
             c.print(f"    [dim]{result.error}[/dim]")
 
+    if extra_vars:
+        c.print(f"  Vars     : {extra_vars}")
+        c.print()
+
     try:
         all_results = execute_run(
             run_id=run_id,
@@ -196,6 +218,7 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool) -> None:
             preloaded_outputs=preloaded_outputs,
             on_model_start=on_start,
             on_model_done=on_done,
+            vars=extra_vars or None,
         )
     except EnvironmentError as exc:
         err_console.print(f"\n[red]Configuration error:[/red] {exc}")

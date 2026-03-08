@@ -46,6 +46,7 @@ def execute_run(
     on_model_done: Callable[[ModelRunResult], None] | None = None,
     llm_call: Callable[[str], str] | None = None,
     rag_call: Callable[..., list] | None = None,
+    vars: dict | None = None,
 ) -> list[ModelRunResult]:
     """
     Execute all *ordered_models* in sequence (dependency order).
@@ -108,7 +109,7 @@ def execute_run(
         db.mark_model_running(run_id, model.name)
 
         try:
-            rendered = render_prompt(model.source, model_outputs, rag_call=rag_call)
+            rendered = render_prompt(model.source, model_outputs, extra_vars=vars, rag_call=rag_call)
 
             if rendered.strip() == SKIP_SENTINEL:
                 llm_output = _SKIP_OUTPUT
