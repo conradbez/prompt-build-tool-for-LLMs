@@ -158,10 +158,13 @@ def execute_run(
             else:
                 import inspect as _inspect
                 t0 = time.monotonic()
-                if model_files and "files" in _inspect.signature(llm_call).parameters:
-                    llm_output = llm_call(rendered, files=model_files)  # noqa: files kwarg matches llm_call signature
-                else:
-                    llm_output = llm_call(rendered)
+                _sig = _inspect.signature(llm_call).parameters
+                _kwargs: dict = {}
+                if model_files and "files" in _sig:
+                    _kwargs["files"] = model_files
+                if "config" in _sig:
+                    _kwargs["config"] = model.config
+                llm_output = llm_call(rendered, **_kwargs)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
 
             # If model declares output_format: json, validate and parse output.

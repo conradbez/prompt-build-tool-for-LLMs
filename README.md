@@ -287,18 +287,19 @@ pbt.run("models", promptfiles={"my_document": "report.pdf"})
 pbt.run("models", promptfiles={"report": "annual.pdf", "chart_image": "q4.png"})
 ```
 
-**3. Custom `llm_call` with file support:**
+**3. Custom `llm_call` with file and config support:**
 
-To handle files in your own `models/client.py`, accept an optional `files` parameter:
+Accept optional `files` and/or `config` parameters in your `models/client.py` — pbt passes them if the signature declares them:
 
 ```python
 # models/client.py
-def llm_call(prompt: str, files: list[str] | None = None) -> str:
-    # files is a list of resolved file paths for this model
+def llm_call(prompt: str, files: list[str] | None = None, config: dict | None = None) -> str:
+    # files  — resolved file paths declared via config(promptfiles=...)
+    # config — the full config dict for this model, e.g. {"output_format": "json"}
     ...
 ```
 
-pbt checks the function signature at runtime — if `files` is not in the signature, files are silently omitted (backward compatible).
+Both parameters are optional and independent — declare either, both, or neither.
 
 ---
 
