@@ -88,6 +88,7 @@ def execute_tests(
     model_outputs: dict[str, str],
     on_test_start: Callable[[str], None] | None = None,
     on_test_done: Callable[[TestResult], None] | None = None,
+    llm_call: Callable[[str], str] | None = None,
 ) -> list[TestResult]:
     """
     Execute each test prompt against the given model outputs.
@@ -101,7 +102,15 @@ def execute_tests(
         Mapping of test_name → raw prompt source, from load_tests().
     model_outputs:
         Mapping of model_name → LLM output, used to resolve ref() calls.
+    llm_call:
+        LLM backend callable ``(prompt: str) -> str``. Required.
     """
+    if llm_call is None:
+        raise ValueError(
+            "llm_call must be provided to execute_tests(). "
+            "Use pbt.llm.resolve_llm_call(models_dir) to auto-discover from client.py."
+        )
+
     results: list[TestResult] = []
 
     for test_name in sorted(tests):
@@ -113,9 +122,7 @@ def execute_tests(
         try:
             rendered = render_prompt(source, model_outputs)
             t0 = time.monotonic()
-            # TODO: re-enable when Gemini call is active
-            # response = client.generate_content(rendered)
-            llm_output = '{"results": "pass"}'   # placeholder
+            llm_output = llm_call(rendered)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
 
             passed = _parse_pass(llm_output)

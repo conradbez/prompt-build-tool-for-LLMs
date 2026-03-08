@@ -11,7 +11,7 @@ import importlib.util
 import os
 from typing import Callable
 
-_DEFAULT_MODEL = "gemini-2.0-flash"
+_DEFAULT_MODEL = "gemini-3-flash-preview"
 
 
 def resolve_llm_call(models_dir: str) -> Callable[[str], str]:

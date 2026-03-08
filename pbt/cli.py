@@ -438,6 +438,15 @@ def test(models_dir: str, tests_dir: str, run_id: str | None, no_color: bool) ->
     c.print()
 
     # ------------------------------------------------------------------
+    # Resolve LLM backend
+    # ------------------------------------------------------------------
+    try:
+        llm_call = resolve_llm_call(models_dir)
+    except Exception as exc:
+        err_console.print(f"[red]Backend resolution error:[/red] {exc}")
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
     # Execute tests
     # ------------------------------------------------------------------
     test_results: list[TestResult] = []
@@ -464,6 +473,7 @@ def test(models_dir: str, tests_dir: str, run_id: str | None, no_color: bool) ->
         model_outputs=model_outputs,
         on_test_start=on_start,
         on_test_done=on_done,
+        llm_call=llm_call,
     )
 
     # ------------------------------------------------------------------
@@ -715,7 +725,7 @@ from google import genai
 def llm_call(prompt: str) -> str:
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     return client.models.generate_content(
-        model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+        model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
         contents=prompt,
     ).text
 """,

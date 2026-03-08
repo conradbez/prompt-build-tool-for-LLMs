@@ -500,7 +500,7 @@ prompt-build-tool-for-LLMs/
 | Environment variable | Default | Description |
 |---|---|---|
 | `GEMINI_API_KEY` | — | **Required** (unless using `models/client.py`). Gemini API key. |
-| `GEMINI_MODEL` | `gemini-2.0-flash` | Override the Gemini model. |
+| `GEMINI_MODEL` | `gemini-3-flash-preview` | Override the Gemini model. |
 
 ---
 

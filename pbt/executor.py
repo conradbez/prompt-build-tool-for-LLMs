@@ -9,7 +9,7 @@ For each model (in dependency order):
 Gemini configuration
 --------------------
 Set the GEMINI_API_KEY environment variable before running pbt.
-The model can be overridden with GEMINI_MODEL (default: gemini-2.0-flash).
+The model can be overridden with GEMINI_MODEL (default: gemini-3-flash-preview).
 """
 
 from __future__ import annotations
