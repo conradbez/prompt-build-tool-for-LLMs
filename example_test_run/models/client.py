@@ -5,7 +5,7 @@ from google import genai
 _DEFAULT_MODEL = "gemini-3-flash-preview"
 
 
-def llm_call(prompt: str) -> str:
+def llm_call(prompt: str, files: list[str] | None = None) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise EnvironmentError(
@@ -15,4 +15,13 @@ def llm_call(prompt: str) -> str:
         )
     model_name = os.environ.get("GEMINI_MODEL", _DEFAULT_MODEL)
     client = genai.Client(api_key=api_key)
+
+    if files:
+        from pathlib import Path
+        contents: list = [prompt]
+        for file_path in files:
+            uploaded = client.files.upload(path=Path(file_path))
+            contents.append(uploaded)
+        return client.models.generate_content(model=model_name, contents=contents).text
+
     return client.models.generate_content(model=model_name, contents=prompt).text

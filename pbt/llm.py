@@ -38,9 +38,10 @@ def resolve_llm_call(models_dir: str) -> Callable[[str], str]:
     return _gemini_llm_call
 
 
-def _gemini_llm_call(prompt: str) -> str:
+def _gemini_llm_call(prompt: str, files: list[str] | None = None) -> str:
     try:
         from google import genai
+        from pathlib import Path
     except ImportError as exc:
         raise ImportError(
             "google-genai is required to run prompts. "
@@ -56,4 +57,13 @@ def _gemini_llm_call(prompt: str) -> str:
         )
     model_name = os.environ.get("GEMINI_MODEL", _DEFAULT_MODEL)
     client = genai.Client(api_key=api_key)
+
+    if files:
+        contents: list = [prompt]
+        for file_path in files:
+            p = Path(file_path)
+            file_data = client.files.upload(path=p)
+            contents.append(file_data)
+        return client.models.generate_content(model=model_name, contents=contents).text
+
     return client.models.generate_content(model=model_name, contents=prompt).text

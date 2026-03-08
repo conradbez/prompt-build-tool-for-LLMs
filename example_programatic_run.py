@@ -1,10 +1,11 @@
 """
 Demonstrates running pbt programmatically from Python.
 
-Shows three usage patterns:
+Shows four usage patterns:
   1. Default run — uses models/client.py or built-in Gemini + models/rag.py
   2. Inline llm_call — swap in any LLM without touching the models directory
   3. Inline rag_call — provide a custom RAG function at call time
+  4. Files — pass a file to a model that declares it in its config block
 """
 
 import os
@@ -41,9 +42,9 @@ def my_llm(prompt: str) -> str:
 def example_inline_llm():
     print("\n=== Example 2: inline llm_call ===")
     results = pbt.run(models_dir=MODELS_DIR, llm_call=my_llm)
-    for r in results:
-        preview = r.llm_output[:80].replace("\n", " ") if r.llm_output else r.error
-        print(f"  {r.model_name:20s}  [{r.status}]  {preview}")
+    for name, output in results.items():
+        preview = str(output)[:80].replace("\n", " ") if output else "(no output)"
+        print(f"  {name:20s}  {preview}")
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +71,37 @@ def my_rag(*args) -> list[str]:
 def example_inline_rag():
     print("\n=== Example 3: inline rag_call + inline llm_call ===")
     results = pbt.run(models_dir=MODELS_DIR, llm_call=my_llm, rag_call=my_rag)
-    for r in results:
-        preview = r.llm_output[:80].replace("\n", " ") if r.llm_output else r.error
-        print(f"  {r.model_name:20s}  [{r.status}]  {preview}")
+    for name, output in results.items():
+        preview = str(output)[:80].replace("\n", " ") if output else "(no output)"
+        print(f"  {name:20s}  {preview}")
+
+
+# ---------------------------------------------------------------------------
+# Example 4 — files: pass a markdown style guide to the article model
+# ---------------------------------------------------------------------------
+
+STYLE_GUIDE_PATH = os.path.join(os.path.dirname(__file__), "example_test_run", "example_article.md")
+
+
+def my_llm_with_files(prompt: str, files: list[str] | None = None) -> str:
+    """Stub that echoes prompt length and any files received."""
+    files_info = f", files={files}" if files else ""
+    return f"[stub] received {len(prompt)} chars{files_info}"
+
+
+def example_files():
+    print("\n=== Example 4: passing a file to a model ===")
+    results = pbt.run(
+        models_dir=MODELS_DIR,
+        llm_call=my_llm_with_files,
+        promptfiles={"style_guide": STYLE_GUIDE_PATH},
+    )
+    for name, output in results.items():
+        if isinstance(output, str):
+            preview = output[:120].replace("\n", " ")
+        else:
+            preview = str(output)
+        print(f"  {name:20s}  {preview}")
 
 
 # ---------------------------------------------------------------------------
@@ -87,3 +116,4 @@ if __name__ == "__main__":
 
     example_inline_llm()
     example_inline_rag()
+    example_files()

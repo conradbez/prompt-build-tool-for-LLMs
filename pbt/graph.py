@@ -28,7 +28,8 @@ class PromptModel:
     source: str        # raw file contents
     depends_on: list[str] = field(default_factory=list)
     config: dict = field(default_factory=dict)   # parsed pbt:config block
-    promptdata_used: list[str] = field(default_factory=list)  # promptdata() keys used
+    promptdata_used: list[str] = field(default_factory=list)    # promptdata() keys used
+    promptfiles_used: list[str] = field(default_factory=list)  # promptfiles names declared in config
 
 
 class CyclicDependencyError(Exception):
@@ -41,8 +42,12 @@ class UnknownModelError(Exception):
 
 def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
     """
-    Discover every *.prompt file in *models_dir* and return a mapping of
-    model_name → PromptModel.
+    Discover every *.prompt file in *models_dir* (recursing into subdirectories,
+    like dbt) and return a mapping of model_name → PromptModel.
+
+    The model name is the file stem (e.g. ``article`` for ``sub/article.prompt``).
+    Names must be unique across all subdirectories — a clear error is raised
+    if two files share the same stem.
     """
     models_dir = Path(models_dir)
     if not models_dir.exists():
@@ -53,12 +58,23 @@ def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
 
     models: dict[str, PromptModel] = {}
 
-    for prompt_file in sorted(models_dir.glob("*.prompt")):
+    for prompt_file in sorted(models_dir.rglob("*.prompt")):
         name = prompt_file.stem
+        if name in models:
+            raise ValueError(
+                f"Duplicate model name '{name}': found in both "
+                f"'{models[name].path}' and '{prompt_file.resolve()}'. "
+                "Model names must be unique across all subdirectories."
+            )
         source = prompt_file.read_text(encoding="utf-8")
         deps = extract_dependencies(source)
         config = parse_model_config(source)
         promptdata_used = detect_used_promptdata(source)
+        promptfiles_used = [
+            f.strip()
+            for f in config.get("promptfiles", "").split(",")
+            if f.strip()
+        ]
         models[name] = PromptModel(
             name=name,
             path=prompt_file.resolve(),
@@ -66,6 +82,7 @@ def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
             depends_on=deps,
             config=config,
             promptdata_used=promptdata_used,
+            promptfiles_used=promptfiles_used,
         )
 
     if not models:

@@ -93,6 +93,8 @@ Options:
                           Repeatable: -s outline -s article
   --promptdata KEY=VALUE  Inject a variable via promptdata() into every template.
                           Repeatable: --promptdata country=USA --promptdata tone=formal
+  --promptfile NAME=PATH  Provide a file for models that declare it in config.
+                          Repeatable: --promptfile doc=report.pdf --promptfile img=chart.png
   --validation-dir TEXT   Directory with per-model validation Python files  [default: validation]
   --no-color              Disable rich color output
 ```
@@ -238,6 +240,7 @@ pbt.run(
 | `llm_call` | `(prompt: str) -> str \| None` | Override LLM backend. Falls back to `models/client.py` then Gemini |
 | `rag_call` | `(*args) -> list \| str \| None` | Override RAG function. Falls back to `models/rag.py::do_RAG` |
 | `promptdata` | `dict \| None` | Variables injected into every template, accessed via `{{ promptdata('key') }}` |
+| `promptfiles` | `dict \| None` | File paths by name, provided to models that declare `promptfiles:` in their config block |
 | `validation_dir` | `str` | Directory with per-model `validate(prompt, result) -> bool` files |
 
 Returns a list of `ModelRunResult` objects with fields: `model_name`, `status`, `prompt_rendered`, `llm_output`, `error`, `execution_ms`, `cached`.
@@ -354,6 +357,54 @@ Choose a fascinating topic of your choice.
 ```
 
 `promptdata("name")` returns `None` if the variable was not provided, so `{% if promptdata("x") %}` is always safe.
+
+---
+
+## Passing files to models (`promptfiles`)
+
+Models can receive files (PDFs, images, etc.) alongside the text prompt. Declare the files a model needs in its `{# pbt:config #}` block, then provide the actual paths at runtime.
+
+**1. Declare in config block:**
+
+```jinja
+{# pbt:config
+promptfiles: my_document
+#}
+Summarise the attached document in 3 bullet points.
+```
+
+Multiple files are comma-separated:
+
+```jinja
+{# pbt:config
+promptfiles: report, chart_image
+#}
+```
+
+**2. Provide file paths at runtime:**
+
+```bash
+pbt run --promptfile my_document=report.pdf
+pbt run --promptfile report=annual.pdf --promptfile chart_image=q4.png
+```
+
+```python
+pbt.run("models", promptfiles={"my_document": "report.pdf"})
+pbt.run("models", promptfiles={"report": "annual.pdf", "chart_image": "q4.png"})
+```
+
+**3. Custom `llm_call` with file support:**
+
+To handle files in your own `models/client.py`, accept an optional `files` parameter:
+
+```python
+# models/client.py
+def llm_call(prompt: str, files: list[str] | None = None) -> str:
+    # files is a list of resolved file paths for this model
+    ...
+```
+
+pbt checks the function signature at runtime — if `files` is not in the signature, files are silently omitted (backward compatible).
 
 ---
 

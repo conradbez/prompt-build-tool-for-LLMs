@@ -1,0 +1,2 @@
+Title: The Shift to Small: Why Domain-Specific SLMs are Outpacing General-Purpose Giants in Production
+Description: This post explores the technical and economic advantages of deploying Small Language Models (SLMs) tailored for specific developer workflows over massive, general-purpose LLMs.

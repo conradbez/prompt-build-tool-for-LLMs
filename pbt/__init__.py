@@ -22,6 +22,7 @@ def run(
     rag_call: Callable[..., list] | None = None,
     verbose: bool = True,
     promptdata: dict | None = None,
+    promptfiles: dict | None = None,
     validation_dir: str = "validation",
 ):
     """
@@ -46,6 +47,11 @@ def run(
     promptdata:
         Optional dict of runtime variables. Access them in templates via
         ``{{ promptdata('key') }}``.
+    promptfiles:
+        Optional dict mapping file name → file path. Models that declare
+        ``promptfiles: name`` in their config block will receive these paths
+        as a list passed to ``llm_call(prompt, files=[...])``.
+
 
     Returns
     -------
@@ -185,6 +191,7 @@ def run(
         on_model_start=on_start,
         on_model_done=on_done,
         promptdata=promptdata,
+        promptfiles=promptfiles,
         validators=validators or None,
     )
 

@@ -92,7 +92,7 @@ def create_app(
     Create and return a FastAPI app that exposes pbt over HTTP.
 
     The /run endpoint's query parameters are built dynamically from the vars
-    detected across all .prompt files via VarSpy dry-render at startup.
+    detected across all .prompt files via static promptdata() scanning at startup.
     """
     # Detect promptdata() keys at startup so the OpenAPI schema is accurate
     try:

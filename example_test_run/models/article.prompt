@@ -1,4 +1,9 @@
+{# pbt:config
+promptfiles: style_guide
+#}
 You are an expert technical blogger writing for a developer audience.
+
+Follow the attached style guide when writing this post.
 
 Write a full blog post using the topic and outline below.
 The post should be engaging, technically accurate, and between 600–900 words.

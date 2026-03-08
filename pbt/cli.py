@@ -89,12 +89,22 @@ def main() -> None:
     ),
 )
 @click.option(
+    "--promptfile",
+    "promptfiles",
+    multiple=True,
+    metavar="NAME=PATH",
+    help=(
+        "Provide a file by name for models that declare it in their config block. "
+        "Repeatable: --promptfile doc=report.pdf --promptfile img=chart.png"
+    ),
+)
+@click.option(
     "--validation-dir",
     default="validation",
     show_default=True,
     help="Directory containing per-model validation Python files.",
 )
-def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tuple[str, ...], validation_dir: str) -> None:
+def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tuple[str, ...], promptfiles: tuple[str, ...], validation_dir: str) -> None:
     """Execute all prompt models in dependency order."""
     c = Console(highlight=not no_color)
 
@@ -106,6 +116,15 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
             sys.exit(1)
         k, _, val = v.partition("=")
         promptdata_vars[k] = val
+
+    # Parse --promptfile NAME=PATH pairs into a dict
+    promptfiles_dict: dict[str, str] = {}
+    for f in promptfiles:
+        if "=" not in f:
+            err_console.print(f"[red]Error:[/red] --promptfile must be NAME=PATH, got: {f!r}")
+            sys.exit(1)
+        k, _, val = f.partition("=")
+        promptfiles_dict[k] = val
 
     db.init_db()
 
@@ -269,6 +288,7 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
             llm_call=llm_call,
             rag_call=rag_call,
             promptdata=promptdata_vars or None,
+            promptfiles=promptfiles_dict or None,
             validators=validators or None,
         )
     except EnvironmentError as exc:
@@ -286,6 +306,18 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
     final_status = "success" if errors == 0 else ("partial" if successes > 0 else "error")
     db.finish_run(run_id, final_status)
 
+    # ------------------------------------------------------------------
+    # Write outputs/ directory — one .md file per successful model
+    # ------------------------------------------------------------------
+    outputs_dir = Path("outputs")
+    outputs_dir.mkdir(exist_ok=True)
+    written: list[str] = []
+    for result in all_results:
+        if result.status == "success" and result.llm_output:
+            out_file = outputs_dir / f"{result.model_name}.md"
+            out_file.write_text(result.llm_output, encoding="utf-8")
+            written.append(result.model_name)
+
     c.print()
     c.rule()
 
@@ -297,6 +329,8 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
         summary.add_row("        :", f"[yellow]{skipped}[/yellow] skipped")
     if preloaded_outputs:
         summary.add_row("Reused  :", f"[dim]{len(preloaded_outputs)} from previous run[/dim]")
+    if written:
+        summary.add_row("Outputs :", f"[dim]{outputs_dir}/[/dim]  {', '.join(written)}")
     summary.add_row("Run ID  :", f"[dim]{run_id}[/dim]")
     summary.add_row("DAG hash:", f"[dim]{dag_hash}[/dim]")
     summary.add_row("DB      :", f"[dim]{db.db_path()}[/dim]")

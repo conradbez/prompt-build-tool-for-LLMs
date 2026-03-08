@@ -64,6 +64,7 @@ def execute_run(
     llm_call: Callable[[str], str] | None = None,
     rag_call: Callable[..., list] | None = None,
     promptdata: dict | None = None,
+    promptfiles: dict | None = None,
     validators: dict | None = None,
 ) -> list[ModelRunResult]:
     """
@@ -135,6 +136,19 @@ def execute_run(
         try:
             rendered = render_prompt(model.source, model_outputs, promptdata=promptdata, rag_call=rag_call)
 
+            # Resolve file paths declared in this model's config block
+            model_files: list[str] | None = None
+            if model.promptfiles_used and promptfiles:
+                model_files = []
+                for name in model.promptfiles_used:
+                    if name not in promptfiles:
+                        raise ValueError(
+                            f"Model '{model.name}' declares promptfile '{name}' in config "
+                            f"but it was not provided. Pass it via --promptfile {name}=path or "
+                            f"the promptfiles= argument."
+                        )
+                    model_files.append(promptfiles[name])
+
             if rendered.strip() == SKIP_SENTINEL:
                 llm_output = _SKIP_OUTPUT
                 elapsed_ms = 0
@@ -142,8 +156,12 @@ def execute_run(
                 llm_output = cached
                 elapsed_ms = 0
             else:
+                import inspect as _inspect
                 t0 = time.monotonic()
-                llm_output = llm_call(rendered)
+                if model_files and "files" in _inspect.signature(llm_call).parameters:
+                    llm_output = llm_call(rendered, files=model_files)  # noqa: files kwarg matches llm_call signature
+                else:
+                    llm_output = llm_call(rendered)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
 
             # If model declares output_format: json, validate and parse output.
