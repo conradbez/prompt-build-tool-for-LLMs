@@ -35,6 +35,7 @@ from pbt.executor import execute_run, ModelRunResult
 from pbt.llm import resolve_llm_call
 from pbt.rag import resolve_rag_call
 from pbt.tester import load_tests, execute_tests, TestResult
+from pbt.docs import generate_docs
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
@@ -546,6 +547,63 @@ def show_result(model_name: str, run_id: str | None, show: str) -> None:
     if row["error"]:
         console.rule("[red]Error[/red]")
         console.print(row["error"])
+
+
+# ---------------------------------------------------------------------------
+# pbt docs
+# ---------------------------------------------------------------------------
+
+@main.command("docs")
+@click.option(
+    "--models-dir",
+    default="models",
+    show_default=True,
+    help="Directory containing *.prompt files (for DAG diagram).",
+)
+@click.option(
+    "--output",
+    default=".pbt/docs/index.html",
+    show_default=True,
+    help="Path to write the generated HTML file.",
+)
+@click.option(
+    "--open",
+    "open_browser",
+    is_flag=True,
+    default=False,
+    help="Open the generated file in the default browser.",
+)
+def docs(models_dir: str, output: str, open_browser: bool) -> None:
+    """Generate a self-contained HTML report of all previous runs."""
+    import webbrowser
+
+    db.init_db()
+
+    # Load all runs and their model results
+    all_runs = db.get_latest_runs(limit=10_000)
+    run_results: dict = {}
+    for run in all_runs:
+        run_results[run["run_id"]] = db.get_run_results(run["run_id"])
+
+    # Try to load models for DAG diagram (optional)
+    models = None
+    try:
+        models = load_models(models_dir)
+    except (FileNotFoundError, Exception):
+        pass
+
+    output_path = Path(output)
+    generate_docs(
+        runs=list(all_runs),
+        run_results=run_results,
+        models=models,
+        output_path=output_path,
+    )
+
+    console.print(f"[green]Docs generated:[/green] [bold]{output_path}[/bold]")
+
+    if open_browser:
+        webbrowser.open(output_path.resolve().as_uri())
 
 
 # ---------------------------------------------------------------------------
