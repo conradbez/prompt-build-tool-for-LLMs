@@ -18,7 +18,7 @@ from typing import Iterator
 
 import networkx as nx
 
-from pbt.parser import extract_dependencies, parse_model_config
+from pbt.parser import extract_dependencies, parse_model_config, detect_used_vars
 
 
 @dataclass
@@ -27,7 +27,8 @@ class PromptModel:
     path: Path         # absolute path to the .prompt file
     source: str        # raw file contents
     depends_on: list[str] = field(default_factory=list)
-    config: dict = field(default_factory=dict)  # parsed pbt:config block
+    config: dict = field(default_factory=dict)   # parsed pbt:config block
+    vars_used: list[str] = field(default_factory=list)  # vars.* keys accessed
 
 
 class CyclicDependencyError(Exception):
@@ -57,12 +58,14 @@ def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
         source = prompt_file.read_text(encoding="utf-8")
         deps = extract_dependencies(source)
         config = parse_model_config(source)
+        vars_used = detect_used_vars(source)
         models[name] = PromptModel(
             name=name,
             path=prompt_file.resolve(),
             source=source,
             depends_on=deps,
             config=config,
+            vars_used=vars_used,
         )
 
     if not models:
@@ -137,6 +140,18 @@ def _lex_topo_sort(dag: nx.DiGraph) -> Iterator[str]:
             in_degree[successor] -= 1
             if in_degree[successor] == 0:
                 heapq.heappush(heap, successor)
+
+
+def get_dag_vars(models: dict[str, PromptModel]) -> list[str]:
+    """
+    Return a deduplicated list of all ``vars.*`` keys used across every model
+    in the DAG, in first-seen (topological) order.
+    """
+    seen: dict[str, None] = {}
+    for model in models.values():
+        for v in model.vars_used:
+            seen[v] = None
+    return list(seen)
 
 
 def compute_dag_hash(models: dict[str, PromptModel]) -> str:

@@ -28,6 +28,7 @@ from pbt.graph import (
     execution_order,
     build_dag,
     compute_dag_hash,
+    get_dag_vars,
     CyclicDependencyError,
     UnknownModelError,
 )
@@ -237,8 +238,16 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str
         c.print(f"  Validators: {sorted(validators.keys())}")
         c.print()
 
+    # Warn about vars used in templates but not provided
+    dag_vars = get_dag_vars(all_models)
+    missing_vars = [v for v in dag_vars if v not in extra_vars]
+    if dag_vars:
+        c.print(f"  Vars used: {dag_vars}")
     if extra_vars:
-        c.print(f"  Vars     : {extra_vars}")
+        c.print(f"  Vars set : {list(extra_vars.keys())}")
+    if missing_vars:
+        c.print(f"  [yellow]Warning: vars not provided: {missing_vars}[/yellow]")
+    if dag_vars or extra_vars:
         c.print()
 
     try:
@@ -461,11 +470,13 @@ def list_models(models_dir: str) -> None:
     table.add_column("#", style="dim", justify="right")
     table.add_column("Model", style="bold cyan")
     table.add_column("Depends on")
+    table.add_column("Vars used", style="dim")
     table.add_column("File", style="dim")
 
     for i, model in enumerate(ordered, 1):
         deps = ", ".join(model.depends_on) if model.depends_on else "[dim]—[/dim]"
-        table.add_row(str(i), model.name, deps, str(model.path))
+        vars_str = ", ".join(model.vars_used) if model.vars_used else "[dim]—[/dim]"
+        table.add_row(str(i), model.name, deps, vars_str, str(model.path))
 
     console.print(table)
 

@@ -30,6 +30,66 @@ _CONFIG_PATTERN = re.compile(
 )
 
 
+class VarSpy(dict):
+    """
+    A dict that records every key accessed via [] or .get().
+    Used during a dry render to discover which vars a template uses.
+    Returns a truthy dummy string for every key so rendering doesn't abort.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._accessed: list[str] = []
+
+    def __getitem__(self, key: str) -> str:
+        self._accessed.append(key)
+        return f"__var_{key}__"
+
+    def __contains__(self, key: object) -> bool:
+        return True  # vars.key always "exists" during dry render
+
+    def get(self, key: str, default=None) -> str:  # type: ignore[override]
+        self._accessed.append(key)
+        return f"__var_{key}__"
+
+    @property
+    def accessed(self) -> list[str]:
+        """Deduplicated list of accessed keys in first-seen order."""
+        return list(dict.fromkeys(self._accessed))
+
+
+def detect_used_vars(template_source: str) -> list[str]:
+    """
+    Dry-render *template_source* with a VarSpy and dummy upstream outputs
+    to discover which ``vars.*`` keys the template accesses.
+
+    Best-effort: if the template errors mid-render, keys accessed up to that
+    point are still returned. Control-flow branches not taken (e.g. the
+    ``{% else %}`` side of a conditional that depends on a var) are not
+    traversed — this is an inherent limitation of dynamic templates.
+    """
+    from collections import defaultdict
+
+    env = _make_env()
+    spy = VarSpy()
+    dummy_outputs: dict = defaultdict(lambda: "dummy_output")
+
+    context = {
+        "ref": lambda name: dummy_outputs[name],
+        "return_list_RAG_results": lambda *_: ["dummy_rag_result"],
+        "was_skipped": lambda _: False,
+        "skip_this_model": SKIP_SENTINEL,
+        "vars": spy,
+    }
+
+    try:
+        env.from_string(template_source).render(**context)
+    except Exception:
+        pass  # partial render still captures vars accessed so far
+
+    return spy.accessed
+
+
 def parse_model_config(template_source: str) -> dict:
     """
     Parse an optional config block at the top of a .prompt file.
