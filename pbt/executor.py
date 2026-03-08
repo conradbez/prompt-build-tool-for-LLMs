@@ -22,8 +22,6 @@ from typing import Callable
 
 from pbt import db
 from pbt.graph import PromptModel
-from pbt.llm import resolve_llm_call
-from pbt.rag import resolve_rag_call
 from pbt.parser import render_prompt, SKIP_SENTINEL, _SKIP_OUTPUT
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
@@ -59,7 +57,6 @@ class ModelRunResult:
 def execute_run(
     run_id: str,
     ordered_models: list[PromptModel],
-    models_dir: str = ".",
     preloaded_outputs: dict[str, str] | None = None,
     on_model_start: Callable[[str], None] | None = None,
     on_model_done: Callable[[ModelRunResult], None] | None = None,
@@ -79,6 +76,11 @@ def execute_run(
     preloaded_outputs:
         Outputs from a previous run to seed ref() lookups.  Used by
         ``--select`` so upstream models don't need to be re-executed.
+    llm_call:
+        LLM backend callable ``(prompt: str) -> str``. Required.
+        Use ``pbt.llm.resolve_llm_call(models_dir)`` to auto-discover from client.py.
+    rag_call:
+        RAG backend callable or None.
     on_model_start / on_model_done:
         Optional progress callbacks for the CLI layer.
 
@@ -87,9 +89,10 @@ def execute_run(
     List of ModelRunResult, one per model.
     """
     if llm_call is None:
-        llm_call = resolve_llm_call(models_dir)
-    if rag_call is None:
-        rag_call = resolve_rag_call(models_dir)
+        raise ValueError(
+            "llm_call must be provided to execute_run(). "
+            "Use pbt.llm.resolve_llm_call(models_dir) to auto-discover from client.py."
+        )
 
     # Seed model_outputs with any preloaded results from a previous run.
     model_outputs: dict[str, str] = dict(preloaded_outputs or {})

@@ -32,6 +32,8 @@ from pbt.graph import (
     UnknownModelError,
 )
 from pbt.executor import execute_run, ModelRunResult
+from pbt.llm import resolve_llm_call
+from pbt.rag import resolve_rag_call
 from pbt.tester import load_tests, execute_tests, TestResult
 
 console = Console()
@@ -206,6 +208,15 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str
             c.print("[red]ERROR[/red]")
             c.print(f"    [dim]{result.error}[/dim]")
 
+    # Discover user-provided client.py and rag.py from models_dir
+    try:
+        llm_call = resolve_llm_call(models_dir)
+        rag_call = resolve_rag_call(models_dir)
+    except Exception as exc:
+        err_console.print(f"[red]Backend resolution error:[/red] {exc}")
+        db.finish_run(run_id, "error")
+        sys.exit(1)
+
     if extra_vars:
         c.print(f"  Vars     : {extra_vars}")
         c.print()
@@ -214,10 +225,11 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, var: tuple[str
         all_results = execute_run(
             run_id=run_id,
             ordered_models=ordered,
-            models_dir=models_dir,
             preloaded_outputs=preloaded_outputs,
             on_model_start=on_start,
             on_model_done=on_done,
+            llm_call=llm_call,
+            rag_call=rag_call,
             vars=extra_vars or None,
         )
     except EnvironmentError as exc:

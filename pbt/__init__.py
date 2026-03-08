@@ -59,6 +59,8 @@ def run(
 
     from pbt import db
     from pbt.executor import execute_run, ModelRunResult
+    from pbt.llm import resolve_llm_call
+    from pbt.rag import resolve_rag_call
     from pbt.parser import _SKIP_OUTPUT
     from pbt.graph import (
         load_models,
@@ -113,6 +115,12 @@ def run(
     except Exception:
         git_sha = None
 
+    # Resolve LLM and RAG backends from user files if not explicitly provided
+    if llm_call is None:
+        llm_call = resolve_llm_call(models_dir)
+    if rag_call is None:
+        rag_call = resolve_rag_call(models_dir)
+
     run_id = db.create_run(
         model_count=len(ordered),
         dag_hash=dag_hash,
@@ -166,7 +174,6 @@ def run(
     results = execute_run(
         run_id=run_id,
         ordered_models=ordered,
-        models_dir=models_dir,
         preloaded_outputs=preloaded_outputs,
         llm_call=llm_call,
         rag_call=rag_call,
