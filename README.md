@@ -317,7 +317,7 @@ output_format: json
 Return a JSON object with keys "title" and "summary".
 ```
 
-When `output_format: json` is set, pbt validates the LLM output as JSON (stripping optional ` ```json ``` ` fences) and passes the parsed `dict`/`list` to downstream models via `ref()`, enabling `{{ ref('model').title }}` access.
+When `output_format: json` is set, pbt validates the LLM output as JSON (stripping optional ` ```json ``` ` fences) and passes the parsed `dict`/`list` to downstream models via `ref()`, for example enabling `{{ ref('model').title }}` access.
 
 ---
 
