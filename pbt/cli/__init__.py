@@ -41,7 +41,7 @@ from pbt.tester import load_tests, execute_tests, TestResult
 from pbt.docs import generate_docs
 from pbt.validator import load_validators
 from pbt.cli.vscode import is_running_in_vscode, setup_vscode_associations
-from pbt.type_hints import register_command as _register_type_hints, generate_stubs as _generate_stubs
+from pbt.cli.type_hints import register_command as _register_type_hints, generate_stubs as _generate_stubs
 from pbt.cli.init_files import register_command as _register_init
 
 console = Console()
@@ -704,7 +704,7 @@ _register_init(main)
 
 
 # ---------------------------------------------------------------------------
-# pbt type-hints  (command defined in pbt/type_hints.py)
+# pbt type-hints  (command defined in pbt/cli/type_hints.py)
 # ---------------------------------------------------------------------------
 
 _register_type_hints(main)
