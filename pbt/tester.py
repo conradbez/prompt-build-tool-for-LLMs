@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 from pbt import db
-from pbt.parser import render_prompt
+from pbt.executor.parser import render_prompt
 
 
 @dataclass
