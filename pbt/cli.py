@@ -23,7 +23,7 @@ from rich.table import Table
 from rich import box
 
 from pbt import db
-from pbt.graph import (
+from pbt.executor.graph import (
     load_models,
     execution_order,
     build_dag,
@@ -31,8 +31,10 @@ from pbt.graph import (
     get_dag_promptdata,
     CyclicDependencyError,
     UnknownModelError,
+    models_to_json,
+    models_from_json,
 )
-from pbt.executor import execute_run, ModelRunResult
+from pbt.executor.executor import execute_run, ModelRunResult
 from pbt.llm import resolve_llm_call
 from pbt.rag import resolve_rag_call
 from pbt.tester import load_tests, execute_tests, TestResult
@@ -69,8 +71,18 @@ def main() -> None:
     multiple=True,
     metavar="MODEL",
     help=(
-        "Run only these models, reusing upstream outputs from the latest "
-        "matching run. Repeatable: -s tweet -s haiku"
+        "Run only these models and their upstream dependencies. "
+        "Unchanged nodes are served instantly from the prompt cache. "
+        "Repeatable: -s tweet -s haiku"
+    ),
+)
+@click.option(
+    "--dag-id",
+    default=None,
+    metavar="HASH",
+    help=(
+        "Load the DAG snapshot from the database instead of reading "
+        "*.prompt files from disk. Use the dag_hash shown after a previous run."
     ),
 )
 @click.option(
@@ -104,7 +116,7 @@ def main() -> None:
     show_default=True,
     help="Directory containing per-model validation Python files.",
 )
-def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tuple[str, ...], promptfiles: tuple[str, ...], validation_dir: str) -> None:
+def run(models_dir: str, select: tuple[str, ...], dag_id: str | None, no_color: bool, promptdata: tuple[str, ...], promptfiles: tuple[str, ...], validation_dir: str) -> None:
     """Execute all prompt models in dependency order."""
     c = Console(highlight=not no_color)
 
@@ -117,25 +129,44 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
         k, _, val = v.partition("=")
         promptdata_vars[k] = val
 
-    # Parse --promptfile NAME=PATH pairs into a dict
-    promptfiles_dict: dict[str, str] = {}
+    # Parse --promptfile NAME=PATH pairs into a dict of open file objects.
+    # Opening here (rather than passing paths) lets llm_call receive a ready-to-
+    # read binary stream regardless of whether the caller is the CLI or the API.
+    promptfiles_dict: dict = {}
     for f in promptfiles:
         if "=" not in f:
             err_console.print(f"[red]Error:[/red] --promptfile must be NAME=PATH, got: {f!r}")
             sys.exit(1)
         k, _, val = f.partition("=")
-        promptfiles_dict[k] = val
+        try:
+            promptfiles_dict[k] = open(val, "rb")  # noqa: WPS515  – closed by llm_call consumer
+        except OSError as exc:
+            err_console.print(f"[red]Error:[/red] Cannot open promptfile '{val}': {exc}")
+            sys.exit(1)
 
     db.init_db()
 
     # ------------------------------------------------------------------
-    # Discover & validate models
+    # Discover & validate models  (from disk or DB snapshot)
     # ------------------------------------------------------------------
-    try:
-        all_models = load_models(models_dir)
-    except FileNotFoundError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
-        sys.exit(1)
+    if dag_id:
+        dag_json = db.load_dag(dag_id)
+        if dag_json is None:
+            err_console.print(
+                f"[red]Error:[/red] DAG '{dag_id}' not found in database.\n"
+                f"Run [bold]pbt run[/bold] without --dag-id first to register it."
+            )
+            sys.exit(1)
+        all_models = models_from_json(dag_json)
+        dag_hash = dag_id
+    else:
+        try:
+            all_models = load_models(models_dir)
+        except FileNotFoundError as exc:
+            err_console.print(f"[red]Error:[/red] {exc}")
+            sys.exit(1)
+        dag_hash = compute_dag_hash(all_models)
+        db.save_dag(dag_hash, models_to_json(all_models))
 
     try:
         ordered = execution_order(all_models)
@@ -143,15 +174,11 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
         err_console.print(f"[red]Dependency error:[/red] {exc}")
         sys.exit(1)
 
-    dag_hash = compute_dag_hash(all_models)
-
     # ------------------------------------------------------------------
-    # --select: only run chosen models, load upstream outputs from DB
+    # --select: run chosen models AND their full upstream dependency chain.
+    # Unchanged nodes are served from the prompt cache automatically.
     # ------------------------------------------------------------------
-    preloaded_outputs: dict[str, str] = {}
-
     if select:
-        # Validate names
         for name in select:
             if name not in all_models:
                 err_console.print(f"[red]Unknown model:[/red] '{name}'")
@@ -160,37 +187,11 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
         selected_set = set(select)
         dag = build_dag(all_models)
 
-        # Determine which upstream models we need outputs for but won't run
-        upstream_needed: set[str] = set()
+        to_run: set[str] = set(selected_set)
         for name in selected_set:
-            upstream_needed.update(nx.ancestors(dag, name))
-        upstream_needed -= selected_set
+            to_run.update(nx.ancestors(dag, name))
 
-        if upstream_needed:
-            prev_run = db.get_latest_run_with_dag_hash(dag_hash)
-            if prev_run is None:
-                err_console.print(
-                    f"[red]Error:[/red] --select requires a previous run with the "
-                    f"same DAG structure (hash [bold]{dag_hash}[/bold]).\n"
-                    f"Run [bold]pbt run[/bold] without --select first."
-                )
-                sys.exit(1)
-
-            preloaded_outputs = db.get_model_outputs_from_run(
-                prev_run["run_id"], list(upstream_needed)
-            )
-
-            missing = upstream_needed - set(preloaded_outputs)
-            if missing:
-                err_console.print(
-                    f"[red]Error:[/red] Previous run [dim]{prev_run['run_id']}[/dim] "
-                    f"is missing successful outputs for: {sorted(missing)}\n"
-                    f"Those models may have errored. Run [bold]pbt run[/bold] first."
-                )
-                sys.exit(1)
-
-        # Only execute the explicitly selected models (in topological order)
-        ordered = [m for m in ordered if m.name in selected_set]
+        ordered = [m for m in ordered if m.name in to_run]
 
     # ------------------------------------------------------------------
     # Print run header
@@ -206,10 +207,8 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
     c.print(f"  Run ID   : [dim]{run_id}[/dim]")
     c.print(f"  DAG hash : [dim]{dag_hash}[/dim]")
     c.print(f"  Models   : {len(ordered)}", end="")
-    if preloaded_outputs:
-        c.print(
-            f"  [dim](+{len(preloaded_outputs)} reused from previous run)[/dim]"
-        )
+    if select:
+        c.print(f"  [dim](select: {sorted(select)})[/dim]")
     else:
         c.print()
     if git_sha:
@@ -280,7 +279,6 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
         all_results = execute_run(
             run_id=run_id,
             ordered_models=ordered,
-            preloaded_outputs=preloaded_outputs,
             on_model_start=on_start,
             on_model_done=on_done,
             llm_call=llm_call,
@@ -325,8 +323,6 @@ def run(models_dir: str, select: tuple[str, ...], no_color: bool, promptdata: tu
         summary.add_row("        :", f"[red]{errors}[/red] errored")
     if skipped:
         summary.add_row("        :", f"[yellow]{skipped}[/yellow] skipped")
-    if preloaded_outputs:
-        summary.add_row("Reused  :", f"[dim]{len(preloaded_outputs)} from previous run[/dim]")
     if written:
         summary.add_row("Outputs :", f"[dim]{outputs_dir}/[/dim]  {', '.join(written)}")
     summary.add_row("Run ID  :", f"[dim]{run_id}[/dim]")
@@ -792,33 +788,73 @@ Does the following text contain at least 3 bullet points (lines starting with - 
 
 Reply with only valid JSON: {"results": "pass"} or {"results": "fail"}.
 """,
-    "models/client.py": """\
+}
+
+_CLIENT_PY: dict[str, str] = {
+    "gemini": """\
 import os
 from google import genai
 
 def llm_call(prompt: str) -> str:
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     return client.models.generate_content(
-        model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
+        model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
         contents=prompt,
     ).text
 """,
-    "validation/article.py": """\
-def validate(prompt: str, result: str) -> bool:
-    \"\"\"Article must be at least 200 characters and contain a markdown header.\"\"\"
-    return len(result) >= 200 and "#" in result
+    "openai": """\
+import os
+from openai import OpenAI
+
+def llm_call(prompt: str) -> str:
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    response = client.chat.completions.create(
+        model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content
+""",
+    "anthropic": """\
+import os
+import anthropic
+
+def llm_call(prompt: str) -> str:
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    message = client.messages.create(
+        model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+        max_tokens=8096,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return message.content[0].text
 """,
 }
+
+_PROVIDERS = ("gemini", "openai", "anthropic")
 
 @main.command("init")
 @click.argument("project_name", default="generate_articles_example")
 @click.option("--force", is_flag=True, default=False, help="Overwrite existing files.")
-def init(project_name: str, force: bool) -> None:
+@click.option(
+    "--provider",
+    type=click.Choice(_PROVIDERS, case_sensitive=False),
+    default="gemini",
+    show_default=True,
+    help="LLM provider to use in the generated client.py.",
+)
+def init(project_name: str, force: bool, provider: str) -> None:
     """Scaffold a starter pbt project inside PROJECT_NAME/."""
+    files = dict(_INIT_FILES)
+    files["models/client.py"] = _CLIENT_PY[provider.lower()]
+    files["validation/article.py"] = """\
+def validate(prompt: str, result: str) -> bool:
+    \"\"\"Article must be at least 200 characters and contain a markdown header.\"\"\"
+    return len(result) >= 200 and "#" in result
+"""
+
     root = Path(project_name)
     created, skipped = [], []
 
-    for rel_path, content in _INIT_FILES.items():
+    for rel_path, content in files.items():
         path = root / rel_path
         if path.exists() and not force:
             skipped.append(str(path))
@@ -834,6 +870,52 @@ def init(project_name: str, force: bool) -> None:
 
     if created:
         console.print(f"\nRun [bold cyan]cd {project_name} && pbt run[/bold cyan], or [bold cyan]pbt run --promptdata topic='your topic'[/bold cyan]")
+
+
+# ---------------------------------------------------------------------------
+# pbt type-hints
+# ---------------------------------------------------------------------------
+
+@main.command("type-hints")
+@click.option("--models-dir", default="models", show_default=True,
+              help="Directory containing *.prompt files.")
+@click.option("--validation-dir", default="validation", show_default=True,
+              help="Directory containing per-model validation Python files.")
+@click.option("--gen-dir", default=".pbt/gen", show_default=True,
+              help="Output directory for generated context stubs.")
+@click.option("--pyproject", "pyproject_path", default="pyproject.toml", show_default=True,
+              help="Path to pyproject.toml to update with jinja-lsp config.")
+def type_hints(models_dir: str, validation_dir: str, gen_dir: str, pyproject_path: str) -> None:
+    """Generate jinja-lsp context stubs for autocomplete in .prompt templates.
+
+    Creates one <model>_context.py stub per model in GEN_DIR, importing
+    the validation class of each upstream dependency so that jinja-lsp can
+    offer typed autocomplete inside the template.
+
+    Also ensures pyproject.toml contains a [tool.jinja-lsp] section pointing
+    at your models/, validation/, and the generated stubs directory.
+    """
+    from cli_helpful_type_hints import generate_stubs, update_pyproject_toml
+
+    try:
+        written = generate_stubs(models_dir, validation_dir, gen_dir)
+    except FileNotFoundError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+
+    for path in written:
+        console.print(f"  [green]wrote[/green]  {path}")
+
+    toml_updated = update_pyproject_toml(models_dir, validation_dir, gen_dir, pyproject_path)
+    if toml_updated:
+        console.print(f"  [green]wrote[/green]  {pyproject_path}  [dim](added [tool.jinja-lsp] section)[/dim]")
+    else:
+        console.print(f"  [dim]skipped[/dim] {pyproject_path}  [dim]([tool.jinja-lsp] already present)[/dim]")
+
+    console.print(
+        f"\n[bold]Done.[/bold] Install the [cyan]jinja-lsp[/cyan] VS Code extension "
+        f"to activate autocomplete in your .prompt files."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -862,7 +944,7 @@ def serve(models_dir: str, validation_dir: str, host: str, port: int, docs_outpu
         sys.exit(1)
 
     try:
-        from pbt.server.app import create_app
+        from utils.server.app import create_app
     except ImportError as exc:
         err_console.print(f"[red]Error:[/red] {exc}")
         sys.exit(1)
