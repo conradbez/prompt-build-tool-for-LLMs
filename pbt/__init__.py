@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from enum import Enum
-from typing import IO, Callable, Union
+from typing import Callable
+
+from pbt.types import PromptFile
 
 __version__ = "0.1.0"
 
@@ -24,7 +25,7 @@ def run(
     rag_call: Callable[..., list] | None = None,
     verbose: bool = True,
     promptdata: dict | None = None,
-    promptfiles: "dict[str, Union[str, os.PathLike[str], IO[bytes]]] | None" = None,
+    promptfiles: dict[str, PromptFile] | None = None,
     validation_dir: str = "validation",
 ):
     """
