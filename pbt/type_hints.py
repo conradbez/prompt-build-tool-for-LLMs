@@ -199,3 +199,48 @@ def update_pyproject_toml(
     )
     path.write_text(content + block, encoding="utf-8")
     return True
+
+
+# ---------------------------------------------------------------------------
+# CLI command — registered onto the main Click group from cli/__init__.py
+# ---------------------------------------------------------------------------
+
+def register_command(main) -> None:
+    """Attach the `pbt type-hints` command to *main* Click group."""
+    import click
+    import sys
+
+    @main.command("type-hints")
+    @click.option("--models-dir", default="models", show_default=True,
+                  help="Directory containing *.prompt files.")
+    @click.option("--validation-dir", default="validation", show_default=True,
+                  help="Directory containing per-model validation Python files.")
+    @click.option("--gen-dir", default=".pbt/gen", show_default=True,
+                  help="Output directory for generated context stubs.")
+    @click.option("--pyproject", "pyproject_path", default="pyproject.toml", show_default=True,
+                  help="Path to pyproject.toml to update with jinja-lsp config.")
+    def type_hints(models_dir: str, validation_dir: str, gen_dir: str, pyproject_path: str) -> None:
+        """Generate jinja-lsp context stubs for autocomplete in .prompt templates."""
+        from rich.console import Console
+        console = Console()
+        err_console = Console(stderr=True, style="bold red")
+
+        try:
+            written = generate_stubs(models_dir, validation_dir, gen_dir)
+        except FileNotFoundError as exc:
+            err_console.print(f"[red]Error:[/red] {exc}")
+            sys.exit(1)
+
+        for path in written:
+            console.print(f"  [green]wrote[/green]  {path}")
+
+        toml_updated = update_pyproject_toml(models_dir, validation_dir, gen_dir, pyproject_path)
+        if toml_updated:
+            console.print(f"  [green]wrote[/green]  {pyproject_path}  [dim](added [tool.jinja-lsp] section)[/dim]")
+        else:
+            console.print(f"  [dim]skipped[/dim] {pyproject_path}  [dim]([tool.jinja-lsp] already present)[/dim]")
+
+        console.print(
+            f"\n[bold]Done.[/bold] Install the [cyan]jinja-lsp[/cyan] VS Code extension "
+            f"to activate autocomplete in your .prompt files."
+        )
