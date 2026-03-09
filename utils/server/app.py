@@ -101,7 +101,7 @@ def create_app(
     """
     # Detect promptdata() keys at startup so the OpenAPI schema is accurate
     try:
-        from pbt.graph import load_models, get_dag_promptdata
+        from pbt.executor.graph import load_models, get_dag_promptdata
         models = load_models(models_dir)
         dag_promptdata = get_dag_promptdata(models)
     except Exception:

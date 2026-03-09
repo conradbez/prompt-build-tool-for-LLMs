@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pbt.graph import PromptModel
+    from pbt.executor.graph import PromptModel
 
 
 _STATUS_COLOUR = {

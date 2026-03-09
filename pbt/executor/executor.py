@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from pbt import db
-from pbt.graph import PromptModel
-from pbt.parser import render_prompt, SKIP_SENTINEL, _SKIP_OUTPUT
+from pbt.executor.graph import PromptModel
+from pbt.executor.parser import render_prompt, SKIP_SENTINEL, _SKIP_OUTPUT
 from pbt.validator import run_validator
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)

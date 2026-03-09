@@ -23,7 +23,7 @@ from rich.table import Table
 from rich import box
 
 from pbt import db
-from pbt.graph import (
+from pbt.executor.graph import (
     load_models,
     execution_order,
     build_dag,
@@ -32,7 +32,7 @@ from pbt.graph import (
     CyclicDependencyError,
     UnknownModelError,
 )
-from pbt.executor import execute_run, ModelRunResult
+from pbt.executor.executor import execute_run, ModelRunResult
 from pbt.llm import resolve_llm_call
 from pbt.rag import resolve_rag_call
 from pbt.tester import load_tests, execute_tests, TestResult
