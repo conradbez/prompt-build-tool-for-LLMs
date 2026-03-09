@@ -362,7 +362,7 @@ Run with `pbt run` — validation fires automatically after each model's LLM cal
 
 ### Typed hints in validation
 
-Use Pydantic models to define the expected shape of your model's JSON output. Pydantic automatically coerces compatible types (e.g. `"123"` → `123`) and raises `ValidationError` with clear messages when data doesn't match:
+Use Pydantic models to define the expected shape of your model's JSON output:
 
 ```python
 # validation/summaries.py
@@ -390,7 +390,7 @@ def validate(prompt: str, result: str) -> bool:
     return len(summaries.summaries) >= 1 and len(summaries.summaries[0].key_points) >= 1
 ```
 
-Pydantic-based validation pairs naturally with `{{ config(output_format="json") }}` models — the LLM is asked to return JSON, and the validator confirms the structure matches your expected schema before passing the result downstream.
+Run `pbt init` to scaffold these validation files automatically — type hints are included out of the box.
 
 ---
 
