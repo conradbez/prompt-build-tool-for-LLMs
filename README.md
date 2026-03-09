@@ -20,12 +20,17 @@ pip install prompt-build-tool
 
 ```bash
 pbt init
+# pbt init --provider openai
+# pbt init --provider anthropic
+# pbt init --provider gemini  (default)
 ```
 
 ### 3. Set your Gemini API key
 
 ```bash
 export GEMINI_API_KEY=your_key_here
+# export OPENAI_API_KEY=your_key_here
+# export ANTHROPIC_API_KEY=your_key_here
 ```
 
 Get a free key at <https://aistudio.google.com/app/apikey>.
@@ -105,6 +110,26 @@ List discovered models and their dependency graph.
 pbt ls
 ```
 
+
+### `pbt test`
+
+Run `tests/*.prompt` files against the latest run's outputs. Each test passes when the LLM returns `{"results": "pass"}`.
+
+```bash
+pbt test
+```
+
+
+### `pbt serve`
+
+Start the pbt HTTP server and open the docs page in the browser.
+
+```bash
+pbt serve
+# pbt serve --host 0.0.0.0 --port 8000
+```
+
+
 ### `pbt docs`
 
 Generate a self-contained HTML report of all previous runs with expandable model details and a DAG diagram.
@@ -113,14 +138,6 @@ Generate a self-contained HTML report of all previous runs with expandable model
 pbt docs                        # writes to .pbt/docs/index.html
 pbt docs --open                 # also opens in the browser
 pbt docs --output my/report.html
-```
-
-### `pbt test`
-
-Run `tests/*.prompt` files against the latest run's outputs. Each test passes when the LLM returns `{"results": "pass"}`.
-
-```bash
-pbt test
 ```
 
 ---
