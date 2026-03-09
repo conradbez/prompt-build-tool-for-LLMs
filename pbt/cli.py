@@ -129,14 +129,20 @@ def run(models_dir: str, select: tuple[str, ...], dag_id: str | None, no_color: 
         k, _, val = v.partition("=")
         promptdata_vars[k] = val
 
-    # Parse --promptfile NAME=PATH pairs into a dict
-    promptfiles_dict: dict[str, str] = {}
+    # Parse --promptfile NAME=PATH pairs into a dict of open file objects.
+    # Opening here (rather than passing paths) lets llm_call receive a ready-to-
+    # read binary stream regardless of whether the caller is the CLI or the API.
+    promptfiles_dict: dict = {}
     for f in promptfiles:
         if "=" not in f:
             err_console.print(f"[red]Error:[/red] --promptfile must be NAME=PATH, got: {f!r}")
             sys.exit(1)
         k, _, val = f.partition("=")
-        promptfiles_dict[k] = val
+        try:
+            promptfiles_dict[k] = open(val, "rb")  # noqa: WPS515  – closed by llm_call consumer
+        except OSError as exc:
+            err_console.print(f"[red]Error:[/red] Cannot open promptfile '{val}': {exc}")
+            sys.exit(1)
 
     db.init_db()
 
