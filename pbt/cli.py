@@ -857,7 +857,7 @@ def serve(models_dir: str, validation_dir: str, host: str, port: int, docs_outpu
         sys.exit(1)
 
     try:
-        from pbt.server.app import create_app
+        from utils.server.app import create_app
     except ImportError as exc:
         err_console.print(f"[red]Error:[/red] {exc}")
         sys.exit(1)

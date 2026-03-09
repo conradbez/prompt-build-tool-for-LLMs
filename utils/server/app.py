@@ -19,6 +19,11 @@ except ImportError as exc:
 import pbt
 
 
+class RunRequest(BaseModel):
+    promptdata: dict[str, Any] | None = None
+    select: list[str] | None = None
+
+
 class RunResponse(BaseModel):
     outputs: dict[str, Any]
     errors: list[str] = []
@@ -117,10 +122,6 @@ def create_app(
         return {"status": "ok", "pbt_version": pbt.__version__, "dag_promptdata": dag_promptdata}
 
     # POST /run — generic JSON body (for programmatic use)
-    class RunRequest(BaseModel):
-        promptdata: dict[str, Any] | None = None
-        select: list[str] | None = None
-
     @app.post("/run", response_model=RunResponse, summary="Run models (JSON body)")
     def run_post(request: RunRequest) -> RunResponse:
         """Run pbt models with a JSON body. Useful for programmatic access."""
