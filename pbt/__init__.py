@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from enum import Enum
-from typing import Callable
+from typing import IO, Callable, Union
 
 __version__ = "0.1.0"
 
@@ -23,7 +24,7 @@ def run(
     rag_call: Callable[..., list] | None = None,
     verbose: bool = True,
     promptdata: dict | None = None,
-    promptfiles: dict | None = None,
+    promptfiles: "dict[str, Union[str, os.PathLike[str], IO[bytes]]] | None" = None,
     validation_dir: str = "validation",
 ):
     """
@@ -53,9 +54,12 @@ def run(
         Optional dict of runtime variables. Access them in templates via
         ``{{ promptdata('key') }}``.
     promptfiles:
-        Optional dict mapping file name → file path. Models that declare
-        ``promptfiles: name`` in their config block will receive these paths
-        as a list passed to ``llm_call(prompt, files=[...])``.
+        Optional dict mapping name → file reference. Models that declare
+        ``promptfiles: name`` in their config block will receive these as a
+        list passed to ``llm_call(prompt, files=[…])``.
+        Values may be a **string path**, a :class:`pathlib.Path`, or any
+        **binary file-like object** (``open(..., "rb")``, ``io.BytesIO``,
+        etc.) — whatever your ``llm_call`` implementation accepts.
 
 
     Returns

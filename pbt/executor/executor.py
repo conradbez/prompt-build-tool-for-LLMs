@@ -15,10 +15,11 @@ The model can be overridden with GEMINI_MODEL (default: gemini-3-flash-preview).
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import IO, Callable, Union
 
 from pbt import db
 from pbt.executor.graph import PromptModel
@@ -64,7 +65,7 @@ def execute_run(
     llm_call: Callable[[str], str] | None = None,
     rag_call: Callable[..., list] | None = None,
     promptdata: dict | None = None,
-    promptfiles: dict | None = None,
+    promptfiles: dict[str, Union[str, "os.PathLike[str]", IO[bytes]]] | None = None,
     validators: dict | None = None,
 ) -> list[ModelRunResult]:
     """
