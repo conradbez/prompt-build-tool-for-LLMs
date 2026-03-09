@@ -203,41 +203,46 @@ def register_command(main) -> None:
         files["models/client.py"] = CLIENT_PY[provider.lower()]
         files["validation/articles.py"] = """\
 import json
+from dataclasses import dataclass, fields
 
-EXPECTED_SCHEMA = {
-    "content": str,
-    "author": str,
-    "audience": str,
-}
+
+@dataclass
+class Article:
+    content: str
+    author: str
+    audience: str
 
 
 def validate(prompt: str, result: str) -> bool:
-    \"\"\"Article output must be valid JSON with content, author, and audience fields.\"\"\"
+    \"\"\"Article output must be valid JSON matching the Article dataclass.\"\"\"
     try:
         data = json.loads(result)
     except json.JSONDecodeError:
         return False
     return all(
-        key in data and isinstance(data[key], expected_type)
-        for key, expected_type in EXPECTED_SCHEMA.items()
+        f.name in data and isinstance(data[f.name], f.type)
+        for f in fields(Article)
     ) and len(data.get("content", "")) >= 200
 """
         files["validation/summaries.py"] = """\
 import json
+from dataclasses import dataclass, field, fields
 
-EXPECTED_SCHEMA = {
-    "summaries": list,
-}
 
-SUMMARY_ITEM_SCHEMA = {
-    "title": str,
-    "summary": str,
-    "key_points": list,
-}
+@dataclass
+class SummaryItem:
+    title: str
+    summary: str
+    key_points: list[str]
+
+
+@dataclass
+class Summaries:
+    summaries: list[SummaryItem] = field(default_factory=list)
 
 
 def validate(prompt: str, result: str) -> bool:
-    \"\"\"Summaries output must be valid JSON with a non-empty summaries list, each entry having title, summary, and key_points.\"\"\"
+    \"\"\"Summaries output must be valid JSON matching the Summaries dataclass.\"\"\"
     try:
         data = json.loads(result)
     except json.JSONDecodeError:
@@ -245,10 +250,7 @@ def validate(prompt: str, result: str) -> bool:
     if not isinstance(data.get("summaries"), list) or not data["summaries"]:
         return False
     for item in data["summaries"]:
-        if not all(
-            key in item and isinstance(item[key], expected_type)
-            for key, expected_type in SUMMARY_ITEM_SCHEMA.items()
-        ):
+        if not all(f.name in item for f in fields(SummaryItem)):
             return False
         if not isinstance(item["key_points"], list) or len(item["key_points"]) < 1:
             return False

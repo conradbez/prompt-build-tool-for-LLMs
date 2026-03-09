@@ -118,7 +118,7 @@ def generate_stubs(
 
     for model_name, model in models.items():
         import_lines: list[str] = []
-        var_lines: list[str] = []
+        dep_classes: dict[str, str] = {}
 
         # --- upstream dependencies -------------------------------------------
         for dep in model.depends_on:
@@ -131,20 +131,16 @@ def generate_stubs(
             import_lines.append(
                 f"from {_module_path(validation_dir, dep)} import {cls}"
             )
-            var_lines.append(
-                f"{dep}: {cls} = None  # output of the '{dep}' model"
-            )
+            dep_classes[dep] = cls
 
         # --- own validation class → ``this`` ---------------------------------
+        own_cls: str | None = None
         own_file = val_dir / f"{model_name}.py"
         if own_file.exists():
-            cls = _first_class_in_file(own_file)
-            if cls is not None:
+            own_cls = _first_class_in_file(own_file)
+            if own_cls is not None:
                 import_lines.append(
-                    f"from {_module_path(validation_dir, model_name)} import {cls}"
-                )
-                var_lines.append(
-                    f"this: {cls} = None  # output schema of this model"
+                    f"from {_module_path(validation_dir, model_name)} import {own_cls}"
                 )
 
         # --- assemble stub file ----------------------------------------------
@@ -153,13 +149,19 @@ def generate_stubs(
         if import_lines:
             chunks.extend(f"{line}\n" for line in import_lines)
             chunks.append("\n")
-            chunks.extend(f"{line}\n" for line in var_lines)
+
+        if dep_classes:
+            for dep, cls in dep_classes.items():
+                chunks.append(f"{dep}: {cls} = None  # output of the '{dep}' model\n")
         else:
             chunks.append(
                 "# No typed validation classes found for this model's dependencies.\n"
                 "# Add a class to the matching validation/*.py file to enable\n"
                 "# autocomplete for that variable inside this template.\n"
             )
+
+        if own_cls is not None:
+            chunks.append(f"\nthis: {own_cls} = None  # output schema of this model\n")
 
         stub_path = out_dir / f"{model_name}_context.py"
         stub_path.write_text("".join(chunks), encoding="utf-8")
