@@ -20,6 +20,17 @@ import networkx as nx
 
 from pbt.executor.parser import extract_dependencies, parse_model_config, detect_used_promptdata
 
+# Supported file extensions, longest first so stripping is unambiguous.
+_PROMPT_SUFFIXES = (".prompt.jinja", ".prompt")
+
+
+def _prompt_name(p: Path) -> str:
+    """Return the model name for a prompt file, stripping any known suffix."""
+    for suffix in _PROMPT_SUFFIXES:
+        if p.name.endswith(suffix):
+            return p.name[: -len(suffix)]
+    return p.stem
+
 
 @dataclass
 class PromptModel:
@@ -58,8 +69,11 @@ def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
 
     models: dict[str, PromptModel] = {}
 
-    for prompt_file in sorted(models_dir.rglob("*.prompt")):
-        name = prompt_file.stem
+    prompt_files = sorted(
+        {*models_dir.rglob("*.prompt"), *models_dir.rglob("*.prompt.jinja")}
+    )
+    for prompt_file in prompt_files:
+        name = _prompt_name(prompt_file)
         if name in models:
             raise ValueError(
                 f"Duplicate model name '{name}': found in both "
@@ -87,7 +101,7 @@ def load_models(models_dir: str | Path = "models") -> dict[str, PromptModel]:
 
     if not models:
         raise FileNotFoundError(
-            f"No *.prompt files found in '{models_dir}'."
+            f"No *.prompt / *.prompt.jinja files found in '{models_dir}'."
         )
 
     return models
@@ -113,7 +127,7 @@ def build_dag(models: dict[str, PromptModel]) -> nx.DiGraph:
             if dep not in models:
                 raise UnknownModelError(
                     f"Model '{name}' references ref('{dep}'), "
-                    f"but '{dep}.prompt' does not exist in the models directory."
+                    f"but '{dep}.prompt' / '{dep}.prompt.jinja' does not exist in the models directory."
                 )
             # Edge: dep → model  (dep must execute first)
             dag.add_edge(dep, name)
