@@ -59,21 +59,67 @@ from typing import Protocol, overload, Any, Literal
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _first_class_in_file(py_path: Path) -> str | None:
+def _validate_return_class(py_path: Path) -> str | None:
     """
-    Return the name of the first class defined at module level in *py_path*.
-    Returns None if the file has no class definitions or cannot be parsed.
+    Return the class name declared as the return type of the top-level
+    ``validate()`` function in *py_path*.
+
+    Handles simple annotations and unions (``X | False``, ``X | None``,
+    ``Union[X, ...]``).  Ignores primitive/opaque types such as ``Any``,
+    ``bool``, ``str``, ``dict``, and ``list``.  Falls back to the first
+    class *defined* in the file when no useful annotation is found.
+
+    Returns None if nothing useful can be extracted or the file cannot be
+    parsed.
     """
+    _OPAQUE = {"Any", "bool", "str", "int", "float", "dict", "list", "None", "False"}
+
+    def _extract_name(node: ast.expr) -> str | None:
+        """Pull a single useful class name out of an annotation AST node."""
+        if isinstance(node, ast.Name):
+            return None if node.id in _OPAQUE else node.id
+        if isinstance(node, ast.Constant):
+            # Literal[False] / None as a constant
+            return None
+        if isinstance(node, ast.Attribute):
+            return node.attr if node.attr not in _OPAQUE else None
+        # X | Y  (Python 3.10+ union syntax)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return _extract_name(node.left) or _extract_name(node.right)
+        # Union[X, Y] / Optional[X] / Literal[False]
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            if node.value.id in ("Union", "Optional"):
+                elts = (
+                    node.slice.elts
+                    if isinstance(node.slice, ast.Tuple)
+                    else [node.slice]
+                )
+                for elt in elts:
+                    name = _extract_name(elt)
+                    if name:
+                        return name
+        return None
+
     try:
         source = py_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(py_path))
     except (SyntaxError, OSError):
         return None
 
-    for node in ast.iter_child_nodes(tree):   # top-level only
-        if isinstance(node, ast.ClassDef):
-            return node.name
-    return None
+    first_class: str | None = None
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef) and first_class is None:
+            first_class = node.name
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "validate"
+            and node.returns is not None
+        ):
+            name = _extract_name(node.returns)
+            if name:
+                return name
+
+    return first_class
 
 
 def _module_path(validation_dir: str, stem: str) -> str:
@@ -102,7 +148,7 @@ def generate_stubs(
     # Collect (stem → class_name) for every validation file that has a class
     dep_classes: dict[str, str] = {}
     for val_file in sorted(val_dir.glob("*.py")):
-        cls = _first_class_in_file(val_file)
+        cls = _validate_return_class(val_file)
         if cls is not None:
             dep_classes[val_file.stem] = cls
 
