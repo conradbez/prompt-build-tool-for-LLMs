@@ -185,6 +185,18 @@ def get_dag_promptdata(models: dict[str, PromptModel]) -> list[str]:
     return list(seen)
 
 
+def get_dag_promptfiles(models: dict[str, PromptModel]) -> list[str]:
+    """
+    Return a deduplicated list of all promptfile names declared across every
+    model in the DAG (via ``# pbt:config promptfiles: ...``), in first-seen order.
+    """
+    seen: dict[str, None] = {}
+    for model in models.values():
+        for v in model.promptfiles_used:
+            seen[v] = None
+    return list(seen)
+
+
 def compute_dag_hash(models: dict[str, PromptModel]) -> str:
     """
     Return a short, deterministic hash of the DAG structure *and* content —
