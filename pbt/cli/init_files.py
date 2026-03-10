@@ -75,17 +75,30 @@ Run with: `pbt run` or `pbt run --promptdata topic="your topic"`
     "validation/0-basic-usage.md": """\
 # Validation
 
-Optional Python code that runs *before* an LLM prompt output is passed to the next prompt.
-Use this to check basic quality gates and avoid wasting tokens on bad intermediate results.
+Optional Python code that post-processes each model's LLM output before it is
+stored and passed to downstream models via `ref()`.
 
-Each `.py` file must expose a `validate(prompt: str, result: str) -> bool` function.
-Returning `False` stops the pipeline and reports a validation error.
+Each `.py` file must expose a `validate(prompt: str, result: str) -> Any` function.
+- Return `False` (or raise) to stop the pipeline and report a validation error.
+- Return any other value to use it as the model's output — this replaces the raw
+  LLM text for both storage and downstream `ref()` calls.
 
-Example `validation/article.py`:
+Example `validation/article.py` — fail short outputs, pass the rest unchanged:
 
-    def validate(prompt: str, result: str) -> bool:
+    def validate(prompt: str, result: str) -> Any:
         \"\"\"Article must be at least 200 characters and contain a markdown header.\"\"\"
-        return len(result) >= 200 and "#" in result
+        if len(result) < 200 or "#" not in result:
+            return False
+        return result
+
+Example with post-processing — parse and return a cleaned dict:
+
+    import json
+
+    def validate(prompt: str, result: str) -> Any:
+        data = json.loads(result)          # raises → model fails
+        data.pop("debug_info", None)       # strip internal keys
+        return data                        # dict replaces raw JSON string downstream
 """,
     "models/articles.prompt": """\
 {{ config(output_format="json") }}
@@ -203,6 +216,7 @@ def register_command(main) -> None:
         files["models/client.py"] = CLIENT_PY[provider.lower()]
         files["validation/articles.py"] = """\
 import json
+from typing import Any
 from pydantic import BaseModel, ValidationError
 
 
@@ -212,17 +226,20 @@ class Article(BaseModel):
     audience: str
 
 
-def validate(prompt: str, result: str) -> bool:
-    \"\"\"Article output must be valid JSON matching the Article model.\"\"\"
+def validate(prompt: str, result: str) -> Any:
+    \"\"\"Validate and return the parsed Article dict, or False on failure.\"\"\"
     try:
         data = json.loads(result)
         article = Article(**data)
     except (json.JSONDecodeError, ValidationError):
         return False
-    return len(article.content) >= 200
+    if len(article.content) < 200:
+        return False
+    return article.model_dump()
 """
         files["validation/summaries.py"] = """\
 import json
+from typing import Any
 from pydantic import BaseModel, ValidationError
 
 
@@ -236,14 +253,16 @@ class Summaries(BaseModel):
     summaries: list[SummaryItem]
 
 
-def validate(prompt: str, result: str) -> bool:
-    \"\"\"Summaries output must be valid JSON matching the Summaries model.\"\"\"
+def validate(prompt: str, result: str) -> Any:
+    \"\"\"Validate and return the parsed Summaries dict, or False on failure.\"\"\"
     try:
         data = json.loads(result)
         summaries = Summaries(**data)
     except (json.JSONDecodeError, ValidationError):
         return False
-    return len(summaries.summaries) >= 1 and len(summaries.summaries[0].key_points) >= 1
+    if not summaries.summaries or not summaries.summaries[0].key_points:
+        return False
+    return summaries.model_dump()
 """
 
         root = Path(project_name)
