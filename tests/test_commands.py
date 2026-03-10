@@ -90,14 +90,14 @@ class TestTypeHints:
         assert result.returncode == 0
         gen_dir = proj / ".pbt" / "gen"
         assert gen_dir.exists()
-        stubs = list(gen_dir.glob("*_context.py"))
-        assert len(stubs) >= 2
+        assert (gen_dir / "ref.py").exists()
 
     def test_type_hints_stub_per_model(self, proj: Path) -> None:
         run_pbt("type-hints", cwd=proj)
-        gen_dir = proj / ".pbt" / "gen"
-        assert (gen_dir / "article_context.py").exists()
-        assert (gen_dir / "summary_context.py").exists()
+        stub = (proj / ".pbt" / "gen" / "ref.py").read_text()
+        assert "Literal['articles']" in stub
+        assert "Literal['summaries']" in stub
+        assert "ModelNames" in stub
 
     def test_type_hints_updates_pyproject(self, proj: Path) -> None:
         run_pbt("type-hints", cwd=proj)
@@ -114,10 +114,9 @@ class TestTypeHints:
     def test_type_hints_custom_dirs(self, proj: Path) -> None:
         result = run_pbt(
             "type-hints",
-            "--models-dir", "models",
             "--validation-dir", "validation",
             "--gen-dir", ".pbt/custom_gen",
             cwd=proj,
         )
         assert result.returncode == 0
-        assert (proj / ".pbt" / "custom_gen").exists()
+        assert (proj / ".pbt" / "custom_gen" / "ref.py").exists()

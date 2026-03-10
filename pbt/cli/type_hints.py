@@ -158,6 +158,8 @@ def generate_stubs(
         for stem, cls in dep_classes.items():
             chunks.append(f"from {_module_path(validation_dir, stem)} import {cls}\n")
         chunks.append("\n")
+        names_literal = ", ".join(f"'{s}'" for s in dep_classes)
+        chunks.append(f"ModelNames = Literal[{names_literal}]\n\n")
         chunks.append("class _Ref(Protocol):\n")
         for stem, cls in dep_classes.items():
             chunks.append(f"    @overload\n")
