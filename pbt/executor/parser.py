@@ -12,8 +12,18 @@ Special template functions
     Returns None if the variable was not provided (so {% if promptdata('x') %}
     works safely).
 
+{{ check_if_model_processed('model_name') }}
+    Returns True if the named upstream model ran and produced real output.
+    Returns False if it was skipped (i.e. returned return_this_model_did_not_process()).
+    Useful for conditional sections:  {% if check_if_model_processed('rag') %}
+
+{{ return_this_model_did_not_process() }}
+    Renders the current model as "did not process", skipping the LLM call.
+    Any downstream models that depend on this model will also be skipped.
+    Equivalent to the skip_this_model variable, but callable for clarity.
+
 All standard Jinja2 features (loops, conditionals, filters, macros, etc.)
-are available in addition to ref() and promptdata().
+are available in addition to the functions above.
 """
 
 import re
@@ -123,6 +133,8 @@ def extract_jinja_config(template_source: str) -> dict[str, str]:
         "return_list_RAG_results": lambda *a, **kw: [],
         "was_skipped": lambda *a, **kw: False,
         "skip_this_model": "",
+        "check_if_model_processed": lambda *a, **kw: False,
+        "return_this_model_did_not_process": lambda: "",
     }
 
     try:
@@ -219,14 +231,24 @@ def render_prompt(
     def was_skipped(model_name: str) -> bool:
         return model_outputs.get(model_name) == _SKIP_OUTPUT
 
+    def check_if_model_processed(model_name: str) -> bool:
+        """Return True if *model_name* ran and produced real output."""
+        output = model_outputs.get(model_name)
+        return output is not None and output != _SKIP_OUTPUT
+
+    def return_this_model_did_not_process() -> str:
+        """Signal that the current model should not process (skip the LLM call)."""
+        return SKIP_SENTINEL
+
     context: dict = {
         "ref": ref,
         "promptdata": _promptdata_fn,
         "return_list_RAG_results": return_list_RAG_results,
         "was_skipped": was_skipped,
         "skip_this_model": SKIP_SENTINEL,
+        "check_if_model_processed": check_if_model_processed,
+        "return_this_model_did_not_process": return_this_model_did_not_process,
         "config": lambda **_: "",   # no-op during real render; config already parsed
-
     }
 
     template = env.from_string(template_source)
