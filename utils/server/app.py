@@ -25,6 +25,15 @@ class RunResponse(BaseModel):
     errors: list[str] = []
 
 
+def _filter_output(serialised: dict[str, Any], output_model: str | None) -> dict[str, Any]:
+    """Return only the requested model's output, or all outputs if not specified."""
+    if output_model is None:
+        return serialised
+    if output_model not in serialised:
+        raise KeyError(output_model)
+    return {output_model: serialised[output_model]}
+
+
 def _serialise(outputs: dict) -> tuple[dict[str, Any], list[str]]:
     serialised: dict[str, Any] = {}
     errors: list[str] = []
@@ -89,6 +98,7 @@ def _build_run_endpoint(
     """
 
     def _run(**kwargs: Any) -> RunResponse:
+        output_model = kwargs.pop("output_model", None)
         provided = {k: v for k, v in kwargs.items() if v is not None}
         try:
             outputs = pbt.run(
@@ -100,9 +110,14 @@ def _build_run_endpoint(
         except Exception as exc:
             return RunResponse(outputs={}, errors=[str(exc)])
         serialised, errors = _serialise(outputs)
+        try:
+            serialised = _filter_output(serialised, output_model)
+        except KeyError:
+            return RunResponse(outputs={}, errors=[f"output_model '{output_model}' not found in run results"])
         return RunResponse(outputs=serialised, errors=errors)
 
-    # Build a signature: one Optional[str] query param per detected promptdata key
+    # Build a signature: one Optional[str] query param per detected promptdata key,
+    # plus a fixed output_model param.
     params = [
         inspect.Parameter(
             key_name,
@@ -112,6 +127,14 @@ def _build_run_endpoint(
         )
         for key_name in dag_promptdata
     ]
+    params.append(
+        inspect.Parameter(
+            "output_model",
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=Query(None, description="If provided, only return this model's output."),
+            annotation=Optional[str],
+        )
+    )
     _run.__signature__ = inspect.Signature(params)
 
     promptfiles_note = (
@@ -202,6 +225,10 @@ def create_app(
             None,
             description="Limit execution to these model names (and their upstream dependencies).",
         ),
+        output_model: Optional[str] = Form(
+            None,
+            description="If provided, only return this model's output instead of all outputs.",
+        ),
         promptfiles: Optional[List[UploadFile]] = File(
             None,
             description=(
@@ -223,6 +250,7 @@ def create_app(
 
         **promptdata** — JSON object string with template variables.\n
         **select** — repeated field to limit which models run.\n
+        **output_model** — if set, only this model's output is returned.\n
         **promptfiles** — one file per declared promptfile key; use the key as the filename
         (with any extension), e.g. `doc.pdf` → key `doc`.
         """
@@ -245,6 +273,10 @@ def create_app(
         except Exception as exc:
             return RunResponse(outputs={}, errors=[str(exc)])
         serialised, errors = _serialise(outputs)
+        try:
+            serialised = _filter_output(serialised, output_model)
+        except KeyError:
+            return RunResponse(outputs={}, errors=[f"output_model '{output_model}' not found in run results"])
         return RunResponse(outputs=serialised, errors=errors)
 
     # GET /run — dynamic query params per detected promptdata key (for the docs UI).
