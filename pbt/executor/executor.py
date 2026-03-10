@@ -183,9 +183,16 @@ def execute_run(
             else:
                 model_outputs[model.name] = llm_output
 
-            # Run user-defined validator if one exists for this model
+            # Run user-defined validator as a post-processing step.
+            # Its return value becomes the model's output; False → error.
             if llm_output != _SKIP_OUTPUT and validators:
-                run_validator(model.name, validators, rendered, llm_output)
+                validated = run_validator(model.name, validators, rendered, llm_output)
+                if isinstance(validated, (dict, list)):
+                    model_outputs[model.name] = validated
+                    llm_output = json.dumps(validated)
+                else:
+                    llm_output = validated if isinstance(validated, str) else str(validated)
+                    model_outputs[model.name] = llm_output
 
             db.mark_model_success(run_id, model.name, rendered, llm_output, cache_key=cache_key)
 

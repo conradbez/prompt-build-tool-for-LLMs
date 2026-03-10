@@ -6,10 +6,13 @@ file in the validation/ directory (e.g. validation/topic.py for topic.prompt).
 
 Each validation file must define::
 
-    def validate(prompt: str, result: str) -> bool:
+    def validate(prompt: str, result: str) -> Any:
         ...
 
-If ``validate`` returns ``False`` (or raises), the model is marked as an error.
+The return value of ``validate`` becomes the model's output and is passed
+downstream via ``ref()``.  Return ``False`` (or raise) to mark the model
+as an error.  Any other return value — including a transformed string, a
+parsed dict, or ``True`` — replaces the LLM output.
 """
 
 from __future__ import annotations
@@ -17,10 +20,10 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 
-def load_validators(validation_dir: str | Path) -> dict[str, Callable[[str, str], bool]]:
+def load_validators(validation_dir: str | Path) -> dict[str, Callable[[str, str], Any]]:
     """
     Discover all *.py files in *validation_dir* and load their ``validate``
     functions.
@@ -37,7 +40,7 @@ def load_validators(validation_dir: str | Path) -> dict[str, Callable[[str, str]
     if not vdir.exists():
         return {}
 
-    validators: dict[str, Callable[[str, str], bool]] = {}
+    validators: dict[str, Callable[[str, str], Any]] = {}
 
     for py_file in sorted(vdir.glob("*.py")):
         model_name = py_file.stem
@@ -53,7 +56,7 @@ def load_validators(validation_dir: str | Path) -> dict[str, Callable[[str, str]
         if not hasattr(module, "validate"):
             raise AttributeError(
                 f"Validation file '{py_file}' must define a "
-                f"'validate(prompt: str, result: str) -> bool' function."
+                f"'validate(prompt: str, result: str) -> Any' function."
             )
 
         validators[model_name] = module.validate
@@ -63,30 +66,48 @@ def load_validators(validation_dir: str | Path) -> dict[str, Callable[[str, str]
 
 def run_validator(
     model_name: str,
-    validators: dict[str, Callable[[str, str], bool]],
+    validators: dict[str, Callable[[str, str], Any]],
     prompt: str,
     result: str,
-) -> None:
+) -> Any:
     """
-    Run the validator for *model_name* if one exists.
+    Run the validator for *model_name* if one exists, and return the output
+    that should be stored and passed downstream.
 
-    Raises
-    ------
-    ValueError
-        If the validator returns False or raises an exception.
+    - If no validator exists for *model_name*, returns *result* unchanged.
+    - If the validator returns ``False`` (or raises), raises ``ValueError``
+      so the model is marked as an error.
+    - Otherwise the validator's return value becomes the model's output.
+
+    Parameters
+    ----------
+    model_name:
+        Name of the model being validated.
+    validators:
+        Mapping loaded by ``load_validators()``.
+    prompt:
+        The fully-rendered prompt sent to the LLM.
+    result:
+        The raw LLM output string.
+
+    Returns
+    -------
+    The final output to store and make available to downstream models via ref().
     """
     validator = validators.get(model_name)
     if validator is None:
-        return
+        return result
 
     try:
-        passed = validator(prompt, result)
+        validated = validator(prompt, result)
     except Exception as exc:
         raise ValueError(
             f"Validator for '{model_name}' raised an exception: {exc}"
         ) from exc
 
-    if not passed:
+    if validated is False:
         raise ValueError(
             f"Validator for '{model_name}' returned False — output did not pass validation."
         )
+
+    return validated
