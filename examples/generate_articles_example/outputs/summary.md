@@ -1,0 +1,3 @@
+*   **Symbiotic Exchange:** Trees and fungi form a subterranean "Wood Wide Web," where trees provide life-sustaining sugars in exchange for essential minerals and water gathered by fungal threads.
+*   **Communication and Support:** This network acts as a communication system, allowing trees to warn neighbors of pests and enabling "Mother Trees" to send nutrients to saplings and kin.
+*   **Strategic Competition:** While primarily cooperative, the network is also used for survival tactics, such as nutrient theft by certain orchids and chemical warfare by trees seeking to eliminate rivals.
