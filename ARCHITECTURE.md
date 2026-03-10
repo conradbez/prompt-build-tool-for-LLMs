@@ -149,7 +149,7 @@ pbt.run(
 |---|---|---|
 | `models_dir` | `str` | Directory containing `*.prompt` files |
 | `select` | `list[str] \| None` | Run only these models (upstream outputs loaded from DB) |
-| `llm_call` | `(prompt: str) -> str \| None` | Override LLM backend. Falls back to `client.py` (next to models/) then Gemini |
+| `llm_call` | `(prompt: str) -> str \| None` | Override LLM backend. Falls back to `client.py` (next to models/) |
 | `rag_call` | `(*args) -> list \| str \| None` | Override RAG function. Falls back to `rag.py` (next to models/) `do_RAG` |
 | `promptdata` | `dict \| None` | Variables injected into every template, accessed via `{{ promptdata('key') }}` |
 | `promptfiles` | `dict \| None` | File paths by name, provided to models that declare `promptfiles:` via `config()` |
@@ -195,7 +195,7 @@ prompt-build-tool-for-LLMs/
 │   │   ├── graph.py     # DAG builder + topological sort (networkx) + serialisation
 │   │   ├── parser.py    # Jinja2 renderer with ref(), config() parsing
 │   │   └── executor.py  # LLM calls + SQLite writes + validation hooks
-│   ├── llm.py           # LLM backend resolver (built-in Gemini or client.py)
+│   ├── llm.py           # LLM backend resolver (loads client.py)
 │   ├── rag.py           # RAG resolver (rag.py → do_RAG)
 │   ├── db.py            # SQLite schema + query helpers
 │   ├── docs.py          # HTML report generator (pbt docs)
@@ -215,14 +215,6 @@ prompt-build-tool-for-LLMs/
 ```
 
 ---
-
-## Configuration
-
-| Environment variable | Default | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | — | **Required** (unless using `client.py`). Gemini API key. |
-| `GEMINI_MODEL` | `gemini-3-flash-preview` | Override the Gemini model. |
-
 
 ---
 

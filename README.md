@@ -19,21 +19,18 @@ pip install prompt-build-tool
 ### 2. Generate example
 
 ```bash
-pbt init
+pbt init --provider anthropic
 # pbt init --provider openai
-# pbt init --provider anthropic
-# pbt init --provider gemini  (default)
+# pbt init --provider gemini
 ```
 
-### 3. Set your Gemini API key
+### 3. Set your API key
 
 ```bash
-export GEMINI_API_KEY=your_key_here
+export ANTHROPIC_API_KEY=your_key_here
 # export OPENAI_API_KEY=your_key_here
-# export ANTHROPIC_API_KEY=your_key_here
+# export GEMINI_API_KEY=your_key_here
 ```
-
-Get a free key at <https://aistudio.google.com/app/apikey>.
 
 ### 4. Run
 
@@ -172,7 +169,7 @@ pbt.run(
 |---|---|---|
 | `models_dir` | `str` | Directory containing `*.prompt` files |
 | `select` | `list[str] \| None` | Run only these models (upstream outputs loaded from DB) |
-| `llm_call` | `(prompt: str) -> str \| None` | Override LLM backend. Falls back to `client.py` (next to models/) then Gemini |
+| `llm_call` | `(prompt: str) -> str \| None` | Override LLM backend. Falls back to `client.py` (next to models/) |
 | `rag_call` | `(*args) -> list \| str \| None` | Override RAG function. Falls back to `rag.py` (next to models/) `do_RAG` |
 | `promptdata` | `dict \| None` | Variables injected into every template, accessed via `{{ promptdata('key') }}` |
 | `promptfiles` | `dict \| None` | File paths by name, provided to models that declare `promptfiles:` in their config block |
@@ -212,11 +209,10 @@ Choose a fascinating topic of your choice.
 
 ## Customising the LLM backend (`client.py`)
 
-Built to be unopinionated on how you do your LLM calls, by default pbt uses Gemini but expects you to implement your
-own LLM calls (usually 5 lines of code). To do so, create `client.py` at the project root (alongside your `models/` directory) and define an `llm_call` function:
+pbt is unopinionated about which LLM you use. Create `client.py` at the project root (alongside your `models/` directory) and define an `llm_call` function — usually 5 lines:
 
 ```python
-# client.py
+# client.py (Anthropic example)
 import anthropic
 
 def llm_call(prompt: str) -> str:
@@ -229,9 +225,7 @@ def llm_call(prompt: str) -> str:
     return message.content[0].text
 ```
 
-pbt will automatically detect and use this file instead of the built-in
-Gemini implementation. If the file exists but does not define `llm_call`,
-pbt raises an error at startup.
+pbt will automatically discover and use this file. Run `pbt init --provider <anthropic|openai|gemini>` to scaffold a starter `client.py` for your chosen provider. If the file exists but does not define `llm_call`, pbt raises an error at startup.
 
 ---
 
