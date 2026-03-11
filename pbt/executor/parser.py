@@ -23,10 +23,7 @@ from typing import Callable
 from jinja2 import Environment, StrictUndefined, Undefined
 
 
-# Kept for backward compatibility — no longer used to detect skips at runtime.
-SKIP_SENTINEL = "SKIP THIS MODEL"
-_SKIP_OUTPUT  = "SKIPPED THIS MODEL"
-SKIP_AND_SET_PREFIX = "SKIP LLM AND SET TO: "
+_SKIP_OUTPUT = "SKIPPED THIS MODEL"
 
 
 @dataclass
