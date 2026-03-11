@@ -16,7 +16,6 @@ from pbt.executor.parser import (
     extract_dependencies,
     parse_model_config,
     detect_used_promptdata,
-    _SKIP_OUTPUT,
     _RenderState,
 )
 
@@ -37,6 +36,5 @@ __all__ = [
     "extract_dependencies",
     "parse_model_config",
     "detect_used_promptdata",
-    "_SKIP_OUTPUT",
     "_RenderState",
 ]

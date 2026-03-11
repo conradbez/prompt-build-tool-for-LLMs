@@ -23,7 +23,7 @@ from typing import Callable
 from pbt import db
 from pbt.executor.graph import PromptModel
 from pbt.types import PromptFile
-from pbt.executor.parser import render_prompt, _SKIP_OUTPUT
+from pbt.executor.parser import render_prompt
 from pbt.validator import run_validator
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
@@ -155,7 +155,7 @@ def execute_run(
             cache_key = rendered + "\x00" + json.dumps(model.config, sort_keys=True)
 
             if skip_state.skip_value is not None:
-                llm_output = skip_state.skip_value or _SKIP_OUTPUT
+                llm_output = skip_state.skip_value
                 elapsed_ms = 0
             elif (cached := db.get_cached_llm_output(cache_key)) is not None:
                 llm_output = cached
@@ -175,7 +175,7 @@ def execute_run(
             # If model declares output_format: json, validate and parse output.
             # Downstream ref() will receive a Python dict/list instead of a string.
             output_format = model.config.get("output_format", "text")
-            if llm_output != _SKIP_OUTPUT and output_format == "json":
+            if llm_output != "" and output_format == "json":
                 parsed = _parse_json_output(llm_output)
                 model_outputs[model.name] = parsed
                 # Normalise to canonical JSON for DB storage
@@ -185,7 +185,7 @@ def execute_run(
 
             # Run user-defined validator as a post-processing step.
             # Its return value becomes the model's output; False → error.
-            if llm_output != _SKIP_OUTPUT and validators:
+            if llm_output != "" and validators:
                 validated = run_validator(model.name, validators, rendered, llm_output)
                 if isinstance(validated, (dict, list)):
                     model_outputs[model.name] = validated

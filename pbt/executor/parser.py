@@ -23,8 +23,6 @@ from typing import Callable
 from jinja2 import Environment, StrictUndefined, Undefined
 
 
-_SKIP_OUTPUT = "SKIPPED THIS MODEL"
-
 
 @dataclass
 class _RenderState:
@@ -255,7 +253,7 @@ def render_prompt(
         return rag_call(*args)
 
     def was_skipped(model_name: str) -> bool:
-        return model_outputs.get(model_name) == _SKIP_OUTPUT
+        return model_outputs.get(model_name) == ""
 
     def skip_and_set_to_value(value) -> str:
         """Skip the LLM call and set this model's output to *value*."""
