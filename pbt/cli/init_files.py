@@ -11,40 +11,22 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 INIT_FILES = {
-    "0-basic-usage.md": """\
+    "README.md": """\
 # Getting Started
 
 | File / Directory | Purpose |
 |-----------------|---------|
-| `client.py` | <- LLM backend (which model/API to call) |
-| `models/` | <- START HERE: Prompt files |
+| `client.py` | LLM backend (which model/API to call) |
+| `models/` | START HERE: Prompt files |
 | `tests/` | LLM-as-judge tests |
 | `validation/` | Pre-pass quality gates |
 | `outputs/` | Generated outputs from `pbt run` (auto-created) |
 
 Run: `pbt run` or `pbt run --promptdata topic="your topic"`
-""",
-    "tests/0-basic-usage.md": """\
-# Tests
 
-Used when you change prompts to make sure everything still works and passes quality standards.
-Write prompts here that will run against your models to assess their quality.
+---
 
-Each `.prompt` file in this directory is an LLM-as-judge test.
-The prompt should reference model outputs via `{{ ref('model_name') }}` and return JSON:
-  - Pass: `{"results": "pass"}`
-  - Fail: `{"results": "fail"}`
-
-Example test file `tests/summary_has_bullets.prompt`:
-
-    Does the following text contain at least 3 bullet points (lines starting with - or •)?
-
-    {{ ref('summary') }}
-
-    Reply with only valid JSON: {"results": "pass"} or {"results": "fail"}.
-""",
-    "models/0-basic-usage.md": """\
-# Models
+## models/
 
 Write your prompts here. Each `.prompt` file defines one step in your pipeline.
 
@@ -66,15 +48,28 @@ Example chain — `models/topic.prompt` → `models/article.prompt` → `models/
     Summarise this article in 3 bullet points. Return JSON: {"bullets": ["...", "...", "..."]}.
     {{ ref('article') }}
 
-## client.py
-The `client.py` at the project root configures which LLM to call. It must expose a
-`llm_call(prompt: str) -> str` function. See the scaffolded example for a
-Gemini implementation.
+---
 
-Run with: `pbt run` or `pbt run --promptdata topic="your topic"`
-""",
-    "validation/0-basic-usage.md": """\
-# Validation
+## tests/
+
+Used when you change prompts to make sure everything still works and passes quality standards.
+
+Each `.prompt` file in this directory is an LLM-as-judge test.
+The prompt should reference model outputs via `{{ ref('model_name') }}` and return JSON:
+  - Pass: `{"results": "pass"}`
+  - Fail: `{"results": "fail"}`
+
+Example `tests/summary_has_bullets.prompt`:
+
+    Does the following text contain at least 3 bullet points (lines starting with - or •)?
+
+    {{ ref('summary') }}
+
+    Reply with only valid JSON: {"results": "pass"} or {"results": "fail"}.
+
+---
+
+## validation/
 
 Optional Python code that post-processes each model's LLM output before it is
 stored and passed to downstream models via `ref()`.
@@ -100,6 +95,13 @@ Example with post-processing — parse and return a cleaned dict:
         data = json.loads(result)          # raises → model fails
         data.pop("debug_info", None)       # strip internal keys
         return data                        # dict replaces raw JSON string downstream
+
+---
+
+## client.py
+
+The `client.py` at the project root configures which LLM to call. It must expose a
+`llm_call(prompt: str) -> str` function. See the scaffolded example for details.
 """,
     "models/articles.prompt": """\
 {{ config(output_format="json") }}
@@ -152,36 +154,58 @@ CLIENT_PY: dict[str, str] = {
 import os
 from google import genai
 
-# This function is automaticaaly picked up by `pbt` and used to run .prompt files
-def llm_call(prompt: str) -> str:
+# Automatically picked up by `pbt` to run .prompt files.
+# Optional kwargs passed by pbt when declared in the signature:
+#   files  - list of open file objects attached to the prompt (via --promptdata key=@path)
+#   config - dict of {{ config(...) }} options from the .prompt file (e.g. {"output_format": "json"})
+def llm_call(prompt: str, files: list | None = None, config: dict | None = None) -> str:
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    uploaded = [client.files.upload(file=f) for f in (files or [])]
+    contents = [prompt] + uploaded if uploaded else prompt
     return client.models.generate_content(
         model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
-        contents=prompt,
+        contents=contents,
     ).text
 """,
     "openai": """\
 import os
 from openai import OpenAI
 
-def llm_call(prompt: str) -> str:
+# Automatically picked up by `pbt` to run .prompt files.
+# Optional kwargs passed by pbt when declared in the signature:
+#   files  - list of open file objects attached to the prompt (via --promptdata key=@path)
+#   config - dict of {{ config(...) }} options from the .prompt file (e.g. {"output_format": "json"})
+def llm_call(prompt: str, files: list | None = None, config: dict | None = None) -> str:
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    response = client.chat.completions.create(
+    content: list = [{"type": "input_text", "text": prompt}]
+    for f in (files or []):
+        uploaded = client.files.create(file=f, purpose="user_data")
+        content.append({"type": "input_file", "file_id": uploaded.id})
+    response = client.responses.create(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-        messages=[{"role": "user", "content": prompt}],
+        input=[{"role": "user", "content": content}],
     )
-    return response.choices[0].message.content
+    return response.output_text
 """,
     "anthropic": """\
 import os
 import anthropic
 
-def llm_call(prompt: str) -> str:
+# Automatically picked up by `pbt` to run .prompt files.
+# Optional kwargs passed by pbt when declared in the signature:
+#   files  - list of open file objects attached to the prompt (via --promptdata key=@path)
+#   config - dict of {{ config(...) }} options from the .prompt file (e.g. {"output_format": "json"})
+def llm_call(prompt: str, files: list | None = None, config: dict | None = None) -> str:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    content: list = []
+    for f in (files or []):
+        uploaded = client.beta.files.upload(file=f)
+        content.append({"type": "document", "source": {"type": "file_id", "value": uploaded.id}})
+    content.append({"type": "text", "text": prompt})
     message = client.messages.create(
         model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         max_tokens=8096,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": content}],
     )
     return message.content[0].text
 """,
@@ -217,52 +241,35 @@ def register_command(main) -> None:
         files = dict(INIT_FILES)
         files["client.py"] = CLIENT_PY[provider.lower()]
         files["validation/articles.py"] = """\
-import json
-from pydantic import BaseModel, ValidationError
+# Validation files let you post-process and gate LLM outputs before they flow downstream.
+# - Name this file after the prompt it validates (e.g. articles.py validates articles.prompt).
+# - Return False (or raise) to fail the pipeline; return any value to replace the raw LLM text.
+# - Returned values are stored and used by ref() in downstream prompts — parse, clean, or reshape freely.
+
+def validate(prompt: str, result: str):
+    \"\"\"Passthrough — replace this with your own logic.\"\"\"
+    return result
 
 
-class Article(BaseModel):
-    content: str
-    author: str
-    audience: str
-
-
-def validate(prompt: str, result: str) -> Article | bool:
-    \"\"\"Validate and return the parsed Article dict, or False on failure.\"\"\"
-    try:
-        data = json.loads(result)
-        article = Article(**data)
-    except (json.JSONDecodeError, ValidationError):
-        return False
-    if len(article.content) < 200:
-        return False
-    return article.model_dump()
-"""
-        files["validation/summaries.py"] = """\
-import json
-from pydantic import BaseModel, ValidationError
-
-
-class SummaryItem(BaseModel):
-    title: str
-    summary: str
-    key_points: list[str]
-
-
-class Summaries(BaseModel):
-    summaries: list[SummaryItem]
-
-
-def validate(prompt: str, result: str) -> Summaries | bool:
-    \"\"\"Validate and return the parsed Summaries dict, or False on failure.\"\"\"
-    try:
-        data = json.loads(result)
-        summaries = Summaries(**data)
-    except (json.JSONDecodeError, ValidationError):
-        return False
-    if not summaries.summaries or not summaries.summaries[0].key_points:
-        return False
-    return summaries.model_dump()
+# Example: parse and validate a JSON article with Pydantic
+#
+# import json
+# from pydantic import BaseModel, ValidationError
+#
+# class Article(BaseModel):
+#     content: str
+#     author: str
+#     audience: str
+#
+# def validate(prompt: str, result: str) -> Article | bool:
+#     try:
+#         data = json.loads(result)
+#         article = Article(**data)
+#     except (json.JSONDecodeError, ValidationError):
+#         return False
+#     if len(article.content) < 200:
+#         return False
+#     return article.model_dump()
 """
 
         root = Path(project_name)
