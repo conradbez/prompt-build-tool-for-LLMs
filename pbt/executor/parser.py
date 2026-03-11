@@ -35,16 +35,19 @@ class _RenderState:
 
     The executor reads this after rendering instead of inspecting the
     rendered prompt string for sentinel values.
+
+    ``skip_value is None``  → model runs normally.
+    ``skip_value == ""``    → skip; use ``_SKIP_OUTPUT`` as the model output.
+    ``skip_value != ""``    → skip; use the string directly as the model output.
     """
-    skip: bool = False
-    skip_value: str | None = None  # None → _SKIP_OUTPUT; str → use as output
+    skip_value: str | None = None
 
 
 class _SkipMarker:
     """Object injected as ``skip_this_model`` in templates.
 
     When Jinja2 renders ``{{ skip_this_model }}``, it calls ``str()`` on this
-    object, which sets the ``skip`` flag on the associated ``_RenderState``
+    object, which sets ``skip_value = ""`` on the associated ``_RenderState``
     and returns an empty string so no sentinel text appears in the prompt.
     """
 
@@ -52,11 +55,11 @@ class _SkipMarker:
         self._state = state
 
     def __str__(self) -> str:
-        self._state.skip = True
+        self._state.skip_value = ""
         return ""
 
     def __format__(self, spec: str) -> str:
-        self._state.skip = True
+        self._state.skip_value = ""
         return ""
 
 # Regex that finds every ref('...') or ref("...") call in raw template text.
@@ -223,10 +226,10 @@ def render_prompt(
 
     Returns
     -------
-    A ``(rendered_prompt, render_state)`` tuple.  ``render_state.skip`` is
-    ``True`` when a skip function was called during rendering; in that case
-    ``render_state.skip_value`` holds the value to use as model output (or
-    ``None`` to use the default ``_SKIP_OUTPUT`` marker).
+    A ``(rendered_prompt, render_state)`` tuple.  ``render_state.skip_value``
+    is ``None`` when the model should run normally, ``""`` when it should be
+    skipped (output becomes ``_SKIP_OUTPUT``), or a non-empty string to use
+    directly as the model output without calling the LLM.
 
     The ``ref(model_name)`` function is available inside templates and
     returns the corresponding entry from *model_outputs*.
@@ -259,7 +262,6 @@ def render_prompt(
 
     def skip_and_set_to_value(value) -> str:
         """Skip the LLM call and set this model's output to *value*."""
-        state.skip = True
         state.skip_value = str(value)
         return ""
 

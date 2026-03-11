@@ -154,8 +154,8 @@ def execute_run(
             # output_format: json) correctly busts the cache.
             cache_key = rendered + "\x00" + json.dumps(model.config, sort_keys=True)
 
-            if skip_state.skip:
-                llm_output = skip_state.skip_value if skip_state.skip_value is not None else _SKIP_OUTPUT
+            if skip_state.skip_value is not None:
+                llm_output = skip_state.skip_value or _SKIP_OUTPUT
                 elapsed_ms = 0
             elif (cached := db.get_cached_llm_output(cache_key)) is not None:
                 llm_output = cached
