@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { cn } from '@/lib/utils';
 
 export type PromptNodeData = {
   label: string;
@@ -12,13 +13,11 @@ function PromptNode({ data, selected }: NodeProps) {
 
   return (
     <div
-      className={[
+      className={cn(
         'relative flex flex-col items-center rounded-xl px-5 py-3 shadow-md cursor-pointer',
         'bg-white border-2 transition-all duration-150 min-w-[140px]',
-        selected
-          ? 'border-blue-500 shadow-blue-100 shadow-lg'
-          : 'border-slate-200 hover:border-slate-400',
-      ].join(' ')}
+        selected ? 'border-blue-500 shadow-blue-100 shadow-lg' : 'border-slate-200 hover:border-slate-400',
+      )}
     >
       {/* target handle (top – receives connections from upstream models) */}
       <Handle
@@ -43,7 +42,7 @@ function PromptNode({ data, selected }: NodeProps) {
             ✓ done
           </span>
         ) : (
-          <span className="text-[10px] text-slate-400">double-click to edit</span>
+          <span className="text-[10px] text-slate-400">click to edit</span>
         )}
       </div>
 

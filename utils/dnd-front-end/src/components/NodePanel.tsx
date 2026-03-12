@@ -1,8 +1,14 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import { PlayIcon, RefreshCwIcon, XIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { Card, CardContent } from '@/components/ui/card';
 
+// Props — nodeId removed; callbacks are pre-bound in DAGEditor so the panel
+// doesn't need to know its own identity.
 interface NodePanelProps {
-  nodeId: string;
   nodeName: string;
   prompt: string;
   output: string | undefined;
@@ -10,13 +16,13 @@ interface NodePanelProps {
   isRunning: boolean;
   dagId: string | null;
   otherNodeNames: string[];
-  onPromptChange: (nodeId: string, value: string) => void;
-  onRename: (nodeId: string, newName: string) => void;
+  onPromptChange: (value: string) => void;
+  onRename: (newName: string) => void;
   onClose: () => void;
   onRun: () => void;
 }
 
-/** Detect if the cursor sits inside a ref(' ... ') expression and return the partial name. */
+/** Return the partial node name being typed after `ref('` at the cursor, or null. */
 function getRefPartial(text: string, cursorPos: number): string | null {
   const before = text.slice(0, cursorPos);
   const match = before.match(/ref\(['"]?([^'")\s]*)$/);
@@ -24,7 +30,6 @@ function getRefPartial(text: string, cursorPos: number): string | null {
 }
 
 export default function NodePanel({
-  nodeId,
   nodeName,
   prompt,
   output,
@@ -39,33 +44,30 @@ export default function NodePanel({
 }: NodePanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [selectedSuggestion, setSelectedSuggestion] = useState(0);
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
+
+  // draftName is initialized once per mount; the parent passes key={nodeId} so
+  // this component remounts when the selected node changes — no useEffect needed.
   const [isEditingName, setIsEditingName] = useState(false);
   const [draftName, setDraftName] = useState(nodeName);
 
-  // Reset draft name when nodeName changes (e.g. switching nodes)
-  useEffect(() => {
-    setDraftName(nodeName);
-    setIsEditingName(false);
-  }, [nodeName]);
+  // ── Textarea change + autocomplete detection ──────────────────────────────
 
   const handleTextChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const value = e.target.value;
-      onPromptChange(nodeId, value);
-
+      onPromptChange(value);
       const partial = getRefPartial(value, e.target.selectionStart ?? value.length);
       if (partial !== null) {
-        const filtered = otherNodeNames.filter((n) =>
-          n.toLowerCase().startsWith(partial.toLowerCase()),
+        setSuggestions(
+          otherNodeNames.filter((n) => n.toLowerCase().startsWith(partial.toLowerCase())),
         );
-        setSuggestions(filtered);
-        setSelectedSuggestion(0);
+        setActiveSuggestion(0);
       } else {
         setSuggestions([]);
       }
     },
-    [nodeId, onPromptChange, otherNodeNames],
+    [onPromptChange, otherNodeNames],
   );
 
   const insertSuggestion = useCallback(
@@ -73,20 +75,15 @@ export default function NodePanel({
       const textarea = textareaRef.current;
       if (!textarea) return;
       const cursorPos = textarea.selectionStart ?? prompt.length;
-      const before = prompt.slice(0, cursorPos);
-      const after = prompt.slice(cursorPos);
-      // Replace the partial ref pattern with the completed ref() call
-      const newBefore = before.replace(/ref\(['"]?[^'")\s]*$/, `ref('${name}')`);
-      const newValue = newBefore + after;
-      onPromptChange(nodeId, newValue);
+      const newBefore = prompt.slice(0, cursorPos).replace(/ref\(['"]?[^'")\s]*$/, `ref('${name}')`);
+      onPromptChange(newBefore + prompt.slice(cursorPos));
       setSuggestions([]);
-      // Restore focus and set cursor after the inserted text
       setTimeout(() => {
         textarea.focus();
         textarea.selectionStart = textarea.selectionEnd = newBefore.length;
       }, 0);
     },
-    [nodeId, prompt, onPromptChange],
+    [prompt, onPromptChange],
   );
 
   const handleKeyDown = useCallback(
@@ -94,89 +91,85 @@ export default function NodePanel({
       if (suggestions.length === 0) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedSuggestion((i) => Math.min(i + 1, suggestions.length - 1));
+        setActiveSuggestion((i) => Math.min(i + 1, suggestions.length - 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSelectedSuggestion((i) => Math.max(i - 1, 0));
+        setActiveSuggestion((i) => Math.max(i - 1, 0));
       } else if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        insertSuggestion(suggestions[selectedSuggestion]);
+        insertSuggestion(suggestions[activeSuggestion]);
       } else if (e.key === 'Escape') {
         setSuggestions([]);
       }
     },
-    [suggestions, selectedSuggestion, insertSuggestion],
+    [suggestions, activeSuggestion, insertSuggestion],
   );
+
+  // ── Rename ────────────────────────────────────────────────────────────────
 
   const commitRename = () => {
     const trimmed = draftName.trim();
-    if (trimmed && trimmed !== nodeName) {
-      onRename(nodeId, trimmed);
-    }
+    if (trimmed && trimmed !== nodeName) onRename(trimmed);
     setIsEditingName(false);
   };
 
   return (
-    <div className="flex flex-col h-full bg-white border-l border-slate-200 w-[420px] flex-shrink-0">
-      {/* Panel header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50">
+    <div className="flex flex-col h-full bg-white border-l border-border w-[420px] flex-shrink-0">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
             Model
           </span>
           {isEditingName ? (
-            <input
+            <Input
               autoFocus
-              className="font-mono font-semibold text-sm border-b border-blue-400 outline-none bg-transparent flex-1 min-w-0"
+              className="font-mono font-semibold text-sm h-7 py-0 border-0 border-b rounded-none focus-visible:ring-0 bg-transparent flex-1 min-w-0"
               value={draftName}
               onChange={(e) => setDraftName(e.target.value)}
               onBlur={commitRename}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') commitRename();
-                if (e.key === 'Escape') {
-                  setDraftName(nodeName);
-                  setIsEditingName(false);
-                }
+                if (e.key === 'Escape') { setDraftName(nodeName); setIsEditingName(false); }
               }}
             />
           ) : (
-            <button
-              className="font-mono font-semibold text-sm text-slate-800 hover:text-blue-600 truncate"
+            <Button
+              variant="ghost"
+              size="sm"
+              className="font-mono font-semibold text-sm h-auto py-0 px-1 hover:text-primary truncate"
               onClick={() => setIsEditingName(true)}
               title="Click to rename"
             >
               {nodeName}
-            </button>
+            </Button>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="ml-2 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors"
-          title="Close panel"
-        >
+        <Button variant="ghost" size="icon" onClick={onClose} title="Close panel">
           <XIcon size={14} />
-        </button>
+        </Button>
       </div>
 
       {/* Prompt editor */}
       <div className="px-4 pt-3 pb-2">
-        <label className="block text-xs font-medium text-slate-500 mb-1">
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
           Prompt template
-          <span className="ml-1 text-slate-400 font-normal">
-            — use <code className="bg-slate-100 px-1 rounded">{'{{ ref(\'name\') }}'}</code> to
-            reference other models
+          <span className="ml-1 font-normal">
+            — use{' '}
+            <code className="bg-muted px-1 rounded text-[11px]">{'{{ ref(\'name\') }}'}</code>{' '}
+            to reference other models
           </span>
         </label>
 
         <div className="relative">
-          <textarea
+          <Textarea
             ref={textareaRef}
             value={prompt}
             onChange={handleTextChange}
             onKeyDown={handleKeyDown}
             rows={10}
             spellCheck={false}
-            className="w-full font-mono text-sm border border-slate-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent placeholder-slate-300 leading-relaxed"
+            className="font-mono text-sm resize-none leading-relaxed"
             placeholder={`Write a Jinja2 prompt template.\n\nExample:\nWrite an article about {{ promptdata('topic') }}\n\nOr reference another model:\n{{ ref('article') }}`}
           />
 
@@ -186,83 +179,82 @@ export default function NodePanel({
               {suggestions.map((name, idx) => (
                 <div
                   key={name}
-                  className={`autocomplete-item ${idx === selectedSuggestion ? 'selected' : ''}`}
+                  className={`autocomplete-item ${idx === activeSuggestion ? 'selected' : ''}`}
                   onMouseDown={(e) => {
-                    e.preventDefault(); // Don't blur textarea
+                    e.preventDefault(); // Keep textarea focused
                     insertSuggestion(name);
                   }}
                 >
-                  ref('{name}')
+                  {`ref('${name}')`}
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* Autocomplete hint */}
-        <p className="text-[11px] text-slate-400 mt-1">
-          Type <code>ref(&#39;</code> to autocomplete a model name from the DAG.
+        <p className="text-[11px] text-muted-foreground mt-1">
+          Type <code className="bg-muted px-0.5 rounded">ref(&#39;</code> to autocomplete a model
+          name. Arrow keys to navigate, Enter/Tab to insert.
         </p>
       </div>
 
       {/* Run button */}
-      <div className="px-4 py-2 border-t border-slate-100">
+      <div className="px-4 py-2 border-t border-border">
         {dagId ? (
-          <button
-            onClick={onRun}
-            disabled={isRunning}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium rounded-lg transition-colors"
-          >
+          <Button onClick={onRun} disabled={isRunning} size="sm">
             {isRunning ? (
-              <>
-                <RefreshCwIcon size={14} className="animate-spin" />
-                Running…
-              </>
+              <><RefreshCwIcon size={13} className="animate-spin" /> Running…</>
             ) : (
-              <>
-                <PlayIcon size={14} />
-                Run model
-              </>
+              <><PlayIcon size={13} /> Run model</>
             )}
-          </button>
+          </Button>
         ) : (
-          <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          <Alert variant="warning">
             Submit the DAG first to enable running individual models.
-          </p>
+          </Alert>
         )}
       </div>
 
       {/* Errors */}
       {errors.length > 0 && (
-        <div className="mx-4 my-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-xs font-semibold text-red-700 mb-1">Errors</p>
-          {errors.map((e, i) => (
-            <p key={i} className="text-xs text-red-600 font-mono">
-              {e}
-            </p>
-          ))}
+        <div className="px-4 py-2">
+          <Alert variant="destructive">
+            <AlertTitle>Run errors</AlertTitle>
+            <AlertDescription>
+              {errors.map((e, i) => (
+                <p key={i} className="font-mono text-xs">
+                  {e}
+                </p>
+              ))}
+            </AlertDescription>
+          </Alert>
         </div>
       )}
 
       {/* Output */}
       <div className="flex-1 overflow-hidden flex flex-col px-4 pb-4 min-h-0">
-        <div className="border-t border-slate-100 pt-3 flex-1 flex flex-col min-h-0">
-          <label className="block text-xs font-medium text-slate-500 mb-2">
+        <div className="border-t border-border pt-3 flex-1 flex flex-col min-h-0">
+          <label className="block text-xs font-medium text-muted-foreground mb-2">
             Output
-            {output && (
-              <span className="ml-2 text-green-600 font-normal">✓ ready</span>
-            )}
+            {output && <span className="ml-2 text-green-600 font-normal">✓ ready</span>}
           </label>
+
           {output ? (
-            <pre className="flex-1 overflow-auto font-mono text-xs bg-slate-50 border border-slate-200 rounded-lg p-3 whitespace-pre-wrap text-slate-700 leading-relaxed">
-              {output}
-            </pre>
+            <Card className="flex-1 overflow-auto">
+              <CardContent className="p-3">
+                <pre className="font-mono text-xs whitespace-pre-wrap text-foreground leading-relaxed">
+                  {output}
+                </pre>
+              </CardContent>
+            </Card>
           ) : (
-            <div className="flex-1 flex items-center justify-center bg-slate-50 border border-dashed border-slate-200 rounded-lg">
-              <p className="text-sm text-slate-400">
-                {isRunning ? 'Running model…' : 'No output yet — run the model to see results here.'}
+            <Card className="flex-1 flex items-center justify-center border-dashed">
+              <p className="text-sm text-muted-foreground">
+                {isRunning
+                  ? 'Running model…'
+                  : 'No output yet — run the model to see results here.'}
               </p>
-            </div>
+            </Card>
           )}
         </div>
       </div>
