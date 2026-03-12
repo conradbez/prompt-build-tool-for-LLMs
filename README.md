@@ -422,7 +422,7 @@ uvicorn.run(app, host="0.0.0.0", port=8000)
 
 ## How to dynamically skip a model
 
-If a rendered prompt evaluates to exactly `SKIP THIS MODEL`, pbt skips the LLM call and marks the model as `skipped`. Use the built-in `{{ skip_this_model }}` variable with a Jinja condition:
+Use the built-in `{{ skip_this_model }}` variable to skip the LLM call during Jinja rendering. When rendered, it contributes no prompt text and marks the model as prompt-skipped:
 
 ```jinja
 {% if "no action needed" in ref('previous_model') %}
@@ -432,4 +432,6 @@ Summarise the following: {{ ref('previous_model') }}
 {% endif %}
 ```
 
-Downstream models that depend on a skipped model are also skipped automatically.
+The model is recorded as a successful run with `prompt_skipped=True`, and downstream templates can detect it with `was_skipped('model_name')`.
+
+If you want to skip the LLM call and set an explicit output value, use `{{ skip_and_set_to_value("value") }}`.

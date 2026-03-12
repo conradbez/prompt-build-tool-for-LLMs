@@ -176,3 +176,16 @@ def test_run_downstream_skipped_on_error(tmp_path: Path) -> None:
     )
     result = run_pbt("run", cwd=proj, check=False)
     assert "skipped" in result.stdout
+
+
+def test_run_skip_and_set_to_value_does_not_crash(tmp_path: Path) -> None:
+    proj = init_project(tmp_path)
+    (proj / "models" / "articles.prompt").write_text(
+        '{{ skip_and_set_to_value("# Precomputed article\\n\\nThis output bypasses the LLM call entirely.") }}\n',
+        encoding="utf-8",
+    )
+
+    result = run_pbt("run", "--select", "articles", cwd=proj)
+
+    assert result.returncode == 0, result.stderr
+    assert (proj / "outputs" / "articles.md").read_text(encoding="utf-8").startswith("# Precomputed article")
