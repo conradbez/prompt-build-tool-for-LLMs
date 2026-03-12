@@ -38,7 +38,7 @@ class PromptModel:
     path: Path         # absolute path to the .prompt file
     source: str        # raw file contents
     depends_on: list[str] = field(default_factory=list)
-    config: dict = field(default_factory=dict)   # parsed pbt:config block
+    config: dict = field(default_factory=dict)   # parsed {{ config(...) }} values
     promptdata_used: list[str] = field(default_factory=list)    # promptdata() keys used
     promptfiles_used: list[str] = field(default_factory=list)  # promptfiles names declared in config
 
@@ -188,7 +188,7 @@ def get_dag_promptdata(models: dict[str, PromptModel]) -> list[str]:
 def get_dag_promptfiles(models: dict[str, PromptModel]) -> list[str]:
     """
     Return a deduplicated list of all promptfile names declared across every
-    model in the DAG (via ``# pbt:config promptfiles: ...``), in first-seen order.
+    model in the DAG (via ``{{ config(promptfiles="...") }}``), in first-seen order.
     """
     seen: dict[str, None] = {}
     for model in models.values():

@@ -210,6 +210,24 @@ async def test_python_api_returns_skip_and_set_value(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_python_api_renders_jinja_inside_skip_and_set_value() -> None:
+    def llm_call(prompt: str) -> str:
+        raise AssertionError("llm_call should not run when skip_and_set_to_value is used")
+
+    result = await pbt.run(
+        models_from_dict={
+            "topic": '{{ skip_and_set_to_value("computed {{ promptdata(\'subject\') }}") }}',
+        },
+        llm_call=llm_call,
+        promptdata={"subject": "value"},
+        verbose=False,
+        storage_backend=MemoryStorageBackend(),
+    )
+
+    assert result["topic"] == "computed value"
+
+
+@pytest.mark.asyncio
 async def test_python_api_inline_models_support_memory_storage_without_disk_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     failing_llm_module = types.ModuleType("pbt.llm")
     failing_rag_module = types.ModuleType("pbt.rag")

@@ -41,12 +41,6 @@ _REF_PATTERN = re.compile(r"""\bref\(\s*['"](\w+)['"]\s*\)""")
 # Used for static detection WITHOUT executing the template.
 _PROMPTDATA_PATTERN = re.compile(r"""\bpromptdata\(\s*['"](\w+)['"]\s*\)""")
 
-# Regex to extract pbt config block: {# pbt:config ... #} at the top of file.
-_CONFIG_PATTERN = re.compile(
-    r"^\s*\{#\s*pbt:config\s*(.*?)\s*#\}", re.DOTALL
-)
-
-
 class _Empty:
     """Permissive stub returned by ref() and other functions during config extraction.
 
@@ -74,24 +68,6 @@ def detect_used_promptdata(template_source: str) -> list[str]:
     for match in _PROMPTDATA_PATTERN.finditer(template_source):
         seen[match.group(1)] = None
     return list(seen)
-
-
-def _parse_static_config(template_source: str) -> dict[str, str]:
-    """Parse the ``{# pbt:config ... #}`` comment block, returning str→str pairs."""
-    match = _CONFIG_PATTERN.search(template_source)
-    if not match:
-        return {}
-    config: dict[str, str] = {}
-    for line in match.group(1).splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" in line:
-            key, _, value = line.partition(":")
-            config[key.strip()] = value.strip()
-    return config
-
-
 def extract_jinja_config(template_source: str) -> dict[str, str]:
     """
     Extract config set via an inline ``{{ config(...) }}`` call in the template.
@@ -142,24 +118,13 @@ def extract_jinja_config(template_source: str) -> dict[str, str]:
 
 def parse_model_config(template_source: str) -> dict:
     """
-    Parse config for a .prompt file from either source:
-
-    1. A ``{# pbt:config ... #}`` comment block (YAML-like, legacy)::
-
-           {# pbt:config
-           output_format: json
-           #}
-
-    2. An inline ``{{ config(...) }}`` Jinja call (dbt-style)::
+    Parse config for a .prompt file from an inline ``{{ config(...) }}`` call::
 
            {{ config(output_format="json", tags="article") }}
 
-    Both are merged; the inline ``config()`` call takes precedence on conflicts.
     Returns a dict of string keys to string values.
     """
-    merged = _parse_static_config(template_source)
-    merged.update(extract_jinja_config(template_source))
-    return merged
+    return extract_jinja_config(template_source)
 
 
 def extract_dependencies(template_source: str) -> list[str]:
@@ -230,19 +195,21 @@ def render_prompt(
     def was_skipped(model_name: str) -> bool:
         return model_name in (prompt_skipped_models or set())
 
-    def skip_and_set_to_value(value) -> str:
-        """Skip the LLM call and set this model's output to *value*."""
-        state.skip_value = str(value)
-        return ""
-
     context: dict = {
         "ref": ref,
         "promptdata": _promptdata_fn,
         "return_list_RAG_results": return_list_RAG_results,
         "was_skipped": was_skipped,
-        "skip_and_set_to_value": skip_and_set_to_value,
         "config": lambda **_: "",   # no-op during real render; config already parsed
     }
+
+    def skip_and_set_to_value(value) -> str:
+        """Skip the LLM call and use the Jinja-rendered *value* as both prompt and output."""
+        rendered_value = env.from_string(str(value)).render(**{**context, "skip_and_set_to_value": lambda nested_value="": str(nested_value)})
+        state.skip_value = rendered_value
+        return rendered_value
+
+    context["skip_and_set_to_value"] = skip_and_set_to_value
 
     template = env.from_string(template_source)
     return template.render(**context), state
