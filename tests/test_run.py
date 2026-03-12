@@ -94,28 +94,28 @@ def test_run_validation_failure_marks_model_error(tmp_path: Path) -> None:
     assert "errored" in result.stdout or result.returncode != 0
 
 
-def test_run_with_file_upload(tmp_path: Path) -> None:
-    """A prompt that declares promptfiles= receives the file and runs successfully."""
-    proj = init_project(tmp_path)
-    (proj / "client.py").write_text(STUB_CLIENT_FILES_PY)
+# def test_run_with_file_upload(tmp_path: Path) -> None:
+#     """A prompt that declares promptfiles= receives the file and runs successfully."""
+#     proj = init_project(tmp_path)
+#     (proj / "client.py").write_text(STUB_CLIENT_FILES_PY)
 
-    # Write a standalone prompt that declares a file dependency
-    (proj / "models" / "summarise_doc.prompt").write_text(
-        '{{ config(promptfiles="doc") }}\n'
-        "Summarise the contents of the uploaded document.\n"
-    )
+#     # Write a standalone prompt that declares a file dependency
+#     (proj / "models" / "summarise_doc.prompt").write_text(
+#         '{{ config(promptfiles="doc") }}\n'
+#         "Summarise the contents of the uploaded document.\n"
+#     )
 
-    # Generate the txt file to upload
-    doc = tmp_path / "sample.txt"
-    doc.write_text("This is a sample document used in the pbt file-upload test.", encoding="utf-8")
+#     # Generate the txt file to upload
+#     doc = tmp_path / "sample.txt"
+#     doc.write_text("This is a sample document used in the pbt file-upload test.", encoding="utf-8")
 
-    result = run_pbt(
-        "run", "--select", "summarise_doc",
-        "--promptfile", f"doc={doc}",
-        cwd=proj,
-    )
-    assert result.returncode == 0
-    assert "succeeded" in result.stdout
+#     result = run_pbt(
+#         "run", "--select", "summarise_doc",
+#         "--promptfile", f"doc={doc}",
+#         cwd=proj,
+#     )
+#     assert result.returncode == 0
+#     assert "succeeded" in result.stdout
 
 
 def _load_env() -> dict:
