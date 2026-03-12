@@ -1,16 +1,10 @@
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
   useNodesState,
-  addEdge,
   type Node,
   type Edge,
   type Connection,
@@ -22,38 +16,51 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useMutation } from '@tanstack/react-query';
-import { PlusIcon, SendIcon, AlertCircleIcon, CheckCircleIcon } from 'lucide-react';
+import {
+  PlusIcon, SendIcon, AlertCircleIcon, CheckCircleIcon,
+  DatabaseIcon, FileIcon,
+} from 'lucide-react';
 
 import PromptNode, { type PromptNodeData } from './PromptNode';
 import NodePanel from './NodePanel';
+import PromptDataManager, { type PromptDataRow } from './PromptDataManager';
+import PromptFileManager, { type PromptFileRow } from './PromptFileManager';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { submitDag, runDag } from '../api';
+
+// ── Module-level constants (stable across renders) ────────────────────────────
 
 const nodeTypes = { promptNode: PromptNode };
 
-let nodeCounter = 1;
+// Stable no-op; only needed to satisfy ReactFlow's onConnectEnd prop type
+const handleConnectEnd: OnConnectEnd = () => {};
 
+let _nodeCounter = 1;
 function makeNodeId() {
-  return `node_${Date.now()}_${nodeCounter++}`;
+  return `node_${Date.now()}_${_nodeCounter++}`;
 }
 
-/** Extract ref('name') calls from a Jinja2 prompt source. */
+/** Regex to extract completed ref('name') calls from a Jinja2 template. */
+const REF_RE = /ref\(['"]([^'"]+)['"]\)/g;
+
 function extractRefs(source: string): string[] {
-  const matches = [...source.matchAll(/ref\(['"]([^'"]+)['"]\)/g)];
-  return [...new Set(matches.map((m) => m[1]))];
+  return [...new Set([...source.matchAll(REF_RE)].map((m) => m[1]))];
 }
 
-/** Build React Flow edges from nodePrompts using ref() calls as source of truth. */
-function computeEdges(
-  nodes: Node[],
-  nodePrompts: Record<string, string>,
-): Edge[] {
+/**
+ * Build React Flow edges from the per-node ref cache.
+ * Refs are the single source of truth; edges are derived, never stored separately.
+ */
+function computeEdges(nodes: Node[], nodeRefs: Record<string, string[]>): Edge[] {
   const nameToId = new Map(nodes.map((n) => [(n.data as PromptNodeData).label, n.id]));
   const edges: Edge[] = [];
-
   for (const node of nodes) {
-    const source = nodePrompts[node.id] ?? '';
-    const refs = extractRefs(source);
-    for (const refName of refs) {
+    for (const refName of nodeRefs[node.id] ?? []) {
       const sourceId = nameToId.get(refName);
       if (sourceId && sourceId !== node.id) {
         edges.push({
@@ -70,22 +77,35 @@ function computeEdges(
   return edges;
 }
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function DAGEditor() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [nodePrompts, setNodePrompts] = useState<Record<string, string>>({});
+  // Per-node extracted ref list — updated whenever a prompt changes (avoids
+  // running the regex over every node on every keystroke).
+  const [nodeRefs, setNodeRefs] = useState<Record<string, string[]>>({});
+
   const [dagId, setDagId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [nodeOutputs, setNodeOutputs] = useState<Record<string, string>>({});
-  const [runningModel, setRunningModel] = useState<string | null>(null);
   const [runErrors, setRunErrors] = useState<string[]>([]);
-  const [addNodeName, setAddNodeName] = useState('');
+
+  // Add-node dialog
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const addInputRef = useRef<HTMLInputElement>(null);
+  const [addNodeName, setAddNodeName] = useState('');
+
+  // Manager dialogs
+  const [showDataManager, setShowDataManager] = useState(false);
+  const [showFileManager, setShowFileManager] = useState(false);
+  const [promptDataRows, setPromptDataRows] = useState<PromptDataRow[]>([]);
+  const [promptFileRows, setPromptFileRows] = useState<PromptFileRow[]>([]);
+
   const rfInstance = useRef<ReactFlowInstance | null>(null);
 
-  // ── Computed values ──────────────────────────────────────────────────────
+  // ── Computed ──────────────────────────────────────────────────────────────
 
-  const edges = useMemo(() => computeEdges(nodes, nodePrompts), [nodes, nodePrompts]);
+  const edges = useMemo(() => computeEdges(nodes, nodeRefs), [nodes, nodeRefs]);
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
@@ -97,9 +117,34 @@ export default function DAGEditor() {
     [nodes],
   );
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
+  // O(1) duplicate-name check used in confirmAddNode + handleRename
+  const modelNameSet = useMemo(() => new Set(allModelNames), [allModelNames]);
 
-  /** Mark the DAG as dirty (requires re-submit) on structural changes. */
+  const otherNodeNames = useMemo(
+    () =>
+      allModelNames.filter(
+        (n) => n !== (selectedNode?.data as PromptNodeData | undefined)?.label,
+      ),
+    [allModelNames, selectedNode],
+  );
+
+  // Promptdata / promptfiles derived for the run API (only filled rows)
+  const promptDataForApi = useMemo(() => {
+    const entries = promptDataRows.filter((r) => r.name.trim());
+    return entries.length > 0
+      ? Object.fromEntries(entries.map((r) => [r.name.trim(), r.value]))
+      : undefined;
+  }, [promptDataRows]);
+
+  const promptFilesForApi = useMemo(() => {
+    const entries = promptFileRows.filter((r) => r.name.trim() && r.file);
+    return entries.length > 0
+      ? Object.fromEntries(entries.map((r) => [r.name.trim(), r.file!]))
+      : undefined;
+  }, [promptFileRows]);
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
   const markDirty = useCallback(() => {
     setDagId(null);
     setNodeOutputs({});
@@ -107,26 +152,27 @@ export default function DAGEditor() {
   }, []);
 
   const updateNodeData = useCallback(
-    (nodeId: string, data: Partial<PromptNodeData>) => {
+    (nodeId: string, patch: Partial<PromptNodeData>) =>
       setNodes((nds) =>
-        nds.map((n) =>
-          n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n,
-        ),
-      );
-    },
+        nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)),
+      ),
     [setNodes],
   );
 
-  // ── Node / Edge change handlers ──────────────────────────────────────────
+  // ── Node change handler ───────────────────────────────────────────────────
 
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
-      const hasRemoval = changes.some((c) => c.type === 'remove');
-      if (hasRemoval) {
-        const removedIds = new Set(
-          changes.filter((c) => c.type === 'remove').map((c) => (c as { id: string }).id),
-        );
+      const removedIds = new Set(
+        changes.filter((c) => c.type === 'remove').map((c) => (c as { id: string }).id),
+      );
+      if (removedIds.size > 0) {
         setNodePrompts((prev) => {
+          const next = { ...prev };
+          removedIds.forEach((id) => delete next[id]);
+          return next;
+        });
+        setNodeRefs((prev) => {
           const next = { ...prev };
           removedIds.forEach((id) => delete next[id]);
           return next;
@@ -139,7 +185,8 @@ export default function DAGEditor() {
     [onNodesChange, markDirty],
   );
 
-  /** When the user drags a handle connection, inject ref() into the target prompt. */
+  // ── Connect — injects ref() text into the target prompt ───────────────────
+
   const handleConnect = useCallback(
     (connection: Connection) => {
       const sourceNode = nodes.find((n) => n.id === connection.source);
@@ -149,40 +196,35 @@ export default function DAGEditor() {
       const refText = `{{ ref('${(sourceNode.data as PromptNodeData).label}') }}`;
       setNodePrompts((prev) => {
         const existing = prev[targetId] ?? '';
-        // Avoid duplicate refs
         if (existing.includes(refText)) return prev;
-        return { ...prev, [targetId]: existing ? `${existing}\n${refText}` : refText };
+        const updated = existing ? `${existing}\n${refText}` : refText;
+        setNodeRefs((r) => ({ ...r, [targetId]: extractRefs(updated) }));
+        return { ...prev, [targetId]: updated };
       });
       markDirty();
-      // addEdge is called here only to trigger the connection visually;
-      // actual edges are still derived from prompts.
-      void addEdge(connection, []);
     },
     [nodes, markDirty],
   );
 
-  // Suppress the default "drop on pane to create node" cursor change
-  const handleConnectEnd: OnConnectEnd = useCallback(() => {}, []);
+  // ── Add node ──────────────────────────────────────────────────────────────
 
-  // ── Add node ─────────────────────────────────────────────────────────────
-
-  const openAddDialog = () => {
+  const openAddDialog = useCallback(() => {
     setAddNodeName('');
     setShowAddDialog(true);
-    setTimeout(() => addInputRef.current?.focus(), 50);
-  };
+  }, []);
 
   const confirmAddNode = useCallback(() => {
     const name = addNodeName.trim();
     if (!name) return;
-    if (allModelNames.includes(name)) {
+    if (modelNameSet.has(name)) {
       alert(`A model named "${name}" already exists.`);
       return;
     }
     const id = makeNodeId();
+    const rawPos = { x: 200 + Math.random() * 300, y: 150 + Math.random() * 200 };
     const position = rfInstance.current
-      ? rfInstance.current.screenToFlowPosition({ x: 200 + Math.random() * 300, y: 150 + Math.random() * 200 })
-      : { x: 200 + Math.random() * 300, y: 150 + Math.random() * 200 };
+      ? rfInstance.current.screenToFlowPosition(rawPos)
+      : rawPos;
 
     setNodes((nds) => [
       ...nds,
@@ -194,35 +236,26 @@ export default function DAGEditor() {
       },
     ]);
     setNodePrompts((prev) => ({ ...prev, [id]: '' }));
+    setNodeRefs((prev) => ({ ...prev, [id]: [] }));
     markDirty();
     setShowAddDialog(false);
-  }, [addNodeName, allModelNames, setNodes, markDirty]);
+  }, [addNodeName, modelNameSet, setNodes, markDirty]);
 
-  // ── Node selection / editing ─────────────────────────────────────────────
+  // ── Node selection (click and double-click share one handler) ─────────────
 
-  const handleNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      setSelectedNodeId(node.id);
-    },
+  const handleNodeSelect = useCallback(
+    (_: React.MouseEvent, node: Node) => setSelectedNodeId(node.id),
     [],
   );
 
-  const handleNodeDoubleClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      setSelectedNodeId(node.id);
-    },
-    [],
-  );
+  const handlePaneClick = useCallback(() => setSelectedNodeId(null), []);
 
-  const handlePaneClick = useCallback(() => {
-    setSelectedNodeId(null);
-  }, []);
-
-  // ── Prompt editing ───────────────────────────────────────────────────────
+  // ── Prompt editing ────────────────────────────────────────────────────────
 
   const handlePromptChange = useCallback(
     (nodeId: string, value: string) => {
       setNodePrompts((prev) => ({ ...prev, [nodeId]: value }));
+      setNodeRefs((prev) => ({ ...prev, [nodeId]: extractRefs(value) }));
       markDirty();
     },
     [markDirty],
@@ -230,26 +263,26 @@ export default function DAGEditor() {
 
   const handleRename = useCallback(
     (nodeId: string, newName: string) => {
-      if (allModelNames.includes(newName)) {
+      if (modelNameSet.has(newName)) {
         alert(`A model named "${newName}" already exists.`);
         return;
       }
       updateNodeData(nodeId, { label: newName });
       markDirty();
     },
-    [allModelNames, updateNodeData, markDirty],
+    [modelNameSet, updateNodeData, markDirty],
   );
 
-  // ── DAG submit ───────────────────────────────────────────────────────────
+  // ── DAG submit ────────────────────────────────────────────────────────────
 
   const submitMutation = useMutation({
-    mutationFn: () => {
-      const payload = nodes.map((n) => ({
-        name: (n.data as PromptNodeData).label,
-        source: nodePrompts[n.id] ?? '',
-      }));
-      return submitDag(payload);
-    },
+    mutationFn: () =>
+      submitDag(
+        nodes.map((n) => ({
+          name: (n.data as PromptNodeData).label,
+          source: nodePrompts[n.id] ?? '',
+        })),
+      ),
     onSuccess: (data) => {
       setDagId(data.dag_id);
       setNodeOutputs({});
@@ -257,38 +290,39 @@ export default function DAGEditor() {
     },
   });
 
-  // ── Model run ────────────────────────────────────────────────────────────
+  // ── Model run ─────────────────────────────────────────────────────────────
 
   const runMutation = useMutation({
-    mutationFn: (modelName: string) => runDag(dagId!, [modelName]),
+    // TanStack Query v5 always calls the latest closure, so promptDataForApi
+    // and promptFilesForApi are current at the time .mutate() is invoked.
+    mutationFn: (modelName: string) =>
+      runDag(dagId!, [modelName], promptDataForApi, promptFilesForApi),
+
     onMutate: (modelName) => {
-      setRunningModel(modelName);
-      setRunErrors([]);
-      // Update node visual state
-      const nodeId = nodes.find(
-        (n) => (n.data as PromptNodeData).label === modelName,
-      )?.id;
+      const nodeId = nodes.find((n) => (n.data as PromptNodeData).label === modelName)?.id;
       if (nodeId) updateNodeData(nodeId, { isRunning: true });
     },
-    onSuccess: (data, modelName) => {
+
+    onSuccess: (data) => {
       setNodeOutputs((prev) => ({ ...prev, ...data.outputs }));
       if (data.errors.length > 0) setRunErrors(data.errors);
 
-      // Update hasOutput / isRunning flags for all affected nodes
-      for (const [name] of Object.entries(data.outputs)) {
-        const nodeId = nodes.find((n) => (n.data as PromptNodeData).label === name)?.id;
-        if (nodeId) updateNodeData(nodeId, { isRunning: false, hasOutput: true });
-      }
-      void modelName; // consumed above
+      // Single setNodes call to update all affected nodes atomically
+      const updatedLabels = new Set(Object.keys(data.outputs));
+      setNodes((nds) =>
+        nds.map((n) =>
+          updatedLabels.has((n.data as PromptNodeData).label)
+            ? { ...n, data: { ...n.data, isRunning: false, hasOutput: true } }
+            : n,
+        ),
+      );
     },
+
     onError: (err, modelName) => {
       setRunErrors([(err as Error).message]);
-      const nodeId = nodes.find(
-        (n) => (n.data as PromptNodeData).label === modelName,
-      )?.id;
+      const nodeId = nodes.find((n) => (n.data as PromptNodeData).label === modelName)?.id;
       if (nodeId) updateNodeData(nodeId, { isRunning: false });
     },
-    onSettled: () => setRunningModel(null),
   });
 
   const handleRunModel = useCallback(() => {
@@ -296,18 +330,17 @@ export default function DAGEditor() {
     runMutation.mutate((selectedNode.data as PromptNodeData).label);
   }, [selectedNode, dagId, runMutation]);
 
-  // ── Derived panel props ──────────────────────────────────────────────────
+  // ── Derived panel props ───────────────────────────────────────────────────
 
   const selectedModelName = selectedNode
     ? (selectedNode.data as PromptNodeData).label
     : null;
 
-  const otherNodeNames = useMemo(
-    () => allModelNames.filter((n) => n !== selectedModelName),
-    [allModelNames, selectedModelName],
-  );
+  // Derived from mutation state — eliminates separate runningModel state variable
+  const isSelectedRunning =
+    runMutation.isPending && runMutation.variables === selectedModelName;
 
-  // ── Status bar info ──────────────────────────────────────────────────────
+  // ── Status bar ────────────────────────────────────────────────────────────
 
   const statusLabel = dagId
     ? `DAG registered — id: ${dagId.slice(0, 12)}…`
@@ -315,47 +348,81 @@ export default function DAGEditor() {
     ? 'Add nodes to get started'
     : 'DAG not submitted — press Submit to register';
 
+  const promptDataCount = promptDataRows.filter((r) => r.name.trim()).length;
+  const promptFileCount = promptFileRows.filter((r) => r.name.trim() && r.file).length;
+
   return (
     <div className="flex flex-col h-full">
-      {/* ── Top toolbar ── */}
-      <header className="flex items-center gap-3 px-4 py-2 bg-white border-b border-slate-200 shadow-sm">
-        <span className="font-bold text-slate-800 tracking-tight mr-2">PBT DAG Editor</span>
+      {/* ── Toolbar ── */}
+      <header className="flex items-center gap-2 px-4 py-2 bg-white border-b border-border shadow-sm">
+        <span className="font-bold text-foreground tracking-tight mr-2 text-sm">
+          PBT DAG Editor
+        </span>
 
         {/* Status indicator */}
-        <div className="flex items-center gap-1.5 text-xs flex-1">
+        <div className="flex items-center gap-1.5 text-xs flex-1 min-w-0">
           {dagId ? (
-            <CheckCircleIcon size={13} className="text-green-500" />
+            <CheckCircleIcon size={13} className="text-green-500 shrink-0" />
           ) : (
-            <AlertCircleIcon size={13} className="text-amber-500" />
+            <AlertCircleIcon size={13} className="text-amber-500 shrink-0" />
           )}
-          <span className={dagId ? 'text-green-700' : 'text-amber-700'}>{statusLabel}</span>
+          <span className={`truncate ${dagId ? 'text-green-700' : 'text-amber-700'}`}>
+            {statusLabel}
+          </span>
         </div>
 
-        {/* Submit DAG */}
-        <button
+        {/* Right-side manager + action buttons */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowDataManager(true)}
+          title="Manage promptdata() variables"
+        >
+          <DatabaseIcon size={13} />
+          Prompt Data
+          {promptDataCount > 0 && (
+            <span className="ml-1 bg-primary text-primary-foreground rounded-full text-[10px] px-1.5 leading-none">
+              {promptDataCount}
+            </span>
+          )}
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowFileManager(true)}
+          title="Manage promptfiles uploads"
+        >
+          <FileIcon size={13} />
+          Prompt Files
+          {promptFileCount > 0 && (
+            <span className="ml-1 bg-primary text-primary-foreground rounded-full text-[10px] px-1.5 leading-none">
+              {promptFileCount}
+            </span>
+          )}
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => submitMutation.mutate()}
           disabled={nodes.length === 0 || submitMutation.isPending}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-300 text-white text-sm font-medium rounded-lg transition-colors"
         >
           <SendIcon size={13} />
           {submitMutation.isPending ? 'Submitting…' : dagId ? 'Resubmit DAG' : 'Submit DAG'}
-        </button>
+        </Button>
 
-        {/* Add node */}
-        <button
-          onClick={openAddDialog}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-        >
+        <Button size="sm" onClick={openAddDialog}>
           <PlusIcon size={13} />
           Add node
-        </button>
+        </Button>
       </header>
 
       {/* ── Submit error ── */}
       {submitMutation.isError && (
-        <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700">
-          {(submitMutation.error as Error).message}
-        </div>
+        <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
+          <AlertDescription>{(submitMutation.error as Error).message}</AlertDescription>
+        </Alert>
       )}
 
       {/* ── Main content ── */}
@@ -369,8 +436,8 @@ export default function DAGEditor() {
             onNodesChange={handleNodesChange}
             onConnect={handleConnect}
             onConnectEnd={handleConnectEnd}
-            onNodeClick={handleNodeClick}
-            onNodeDoubleClick={handleNodeDoubleClick}
+            onNodeClick={handleNodeSelect}
+            onNodeDoubleClick={handleNodeSelect}
             onPaneClick={handlePaneClick}
             onInit={(instance) => { rfInstance.current = instance; }}
             fitView
@@ -384,24 +451,25 @@ export default function DAGEditor() {
             <MiniMap
               nodeColor={() => '#e2e8f0'}
               maskColor="rgba(248,250,252,0.7)"
-              className="border border-slate-200 rounded-lg"
+              className="border border-border rounded-lg"
             />
           </ReactFlow>
         </div>
 
-        {/* Node panel (shown when a node is selected) */}
+        {/* Node panel — key resets all local state when selected node changes,
+            eliminating the need for useEffect-based draftName sync */}
         {selectedNode && selectedModelName && (
           <NodePanel
-            nodeId={selectedNode.id}
+            key={selectedNode.id}
             nodeName={selectedModelName}
             prompt={nodePrompts[selectedNode.id] ?? ''}
             output={nodeOutputs[selectedModelName]}
             errors={runErrors}
-            isRunning={runningModel === selectedModelName}
+            isRunning={isSelectedRunning}
             dagId={dagId}
             otherNodeNames={otherNodeNames}
-            onPromptChange={handlePromptChange}
-            onRename={handleRename}
+            onPromptChange={(value) => handlePromptChange(selectedNode.id, value)}
+            onRename={(newName) => handleRename(selectedNode.id, newName)}
             onClose={() => setSelectedNodeId(null)}
             onRun={handleRunModel}
           />
@@ -409,50 +477,45 @@ export default function DAGEditor() {
       </div>
 
       {/* ── Add node dialog ── */}
-      {showAddDialog && (
-        <div
-          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50"
-          onClick={() => setShowAddDialog(false)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-xl p-6 w-80"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-base font-semibold text-slate-800 mb-3">Add model node</h2>
-            <label className="block text-sm text-slate-600 mb-1">Model name</label>
-            <input
-              ref={addInputRef}
-              type="text"
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add model node</DialogTitle>
+          </DialogHeader>
+          <div>
+            <label className="block text-sm text-muted-foreground mb-1.5">Model name</label>
+            <Input
+              autoFocus
               value={addNodeName}
               onChange={(e) => setAddNodeName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') confirmAddNode();
-                if (e.key === 'Escape') setShowAddDialog(false);
-              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') confirmAddNode(); }}
               placeholder="e.g. article, summary, tweet"
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="font-mono"
             />
-            <p className="text-xs text-slate-400 mt-1">
-              Use lowercase letters, digits, and underscores.
+            <p className="text-xs text-muted-foreground mt-1">
+              Lowercase letters, digits, and underscores only.
             </p>
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => setShowAddDialog(false)}
-                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmAddNode}
-                disabled={!addNodeName.trim()}
-                className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-medium rounded-lg"
-              >
-                Add
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowAddDialog(false)}>Cancel</Button>
+            <Button onClick={confirmAddNode} disabled={!addNodeName.trim()}>Add</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Manager dialogs ── */}
+      <PromptDataManager
+        open={showDataManager}
+        onOpenChange={setShowDataManager}
+        rows={promptDataRows}
+        onRowsChange={setPromptDataRows}
+      />
+      <PromptFileManager
+        open={showFileManager}
+        onOpenChange={setShowFileManager}
+        rows={promptFileRows}
+        onRowsChange={setPromptFileRows}
+      />
     </div>
   );
 }

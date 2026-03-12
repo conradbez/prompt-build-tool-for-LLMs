@@ -227,10 +227,20 @@ def create_app(
     The /run endpoint's query parameters are built dynamically from the vars
     detected across all .prompt files via static promptdata() scanning at startup.
     """
+    # Import DAG helpers once at create_app() time — avoids repeated per-request
+    # import overhead and surfaces import errors at startup rather than on first call.
+    from pbt.executor.graph import (
+        load_models, get_dag_promptdata, get_dag_promptfiles,
+        models_from_dict, compute_dag_hash, models_to_json,
+    )
+    from pbt import db as _db
+
+    # Initialise SQLite schema once at startup (idempotent).
+    _db.init_db()
+
     # Detect promptdata() keys and promptfile names at startup so the OpenAPI
     # schema is accurate.
     try:
-        from pbt.executor.graph import load_models, get_dag_promptdata, get_dag_promptfiles
         models = load_models(models_dir)
         dag_promptdata = get_dag_promptdata(models)
         dag_promptfiles = get_dag_promptfiles(models)
@@ -375,9 +385,6 @@ def create_app(
         (identical to a ``.prompt`` file) including any ``ref()`` and
         ``promptdata()`` calls.
         """
-        from pbt.executor.graph import models_from_dict, compute_dag_hash, models_to_json
-        from pbt import db as _db
-
         models_dict = {node.name: node.source for node in body.nodes}
         try:
             models_map = models_from_dict(models_dict)
@@ -385,7 +392,6 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc))
 
         dag_hash = compute_dag_hash(models_map)
-        _db.init_db()
         _db.save_dag(dag_hash, models_to_json(models_map))
         return _DagResponse(dag_id=dag_hash)
 
@@ -395,18 +401,44 @@ def create_app(
         summary="Run one or more models from a registered DAG",
         tags=["DAG editor"],
     )
-    def run_dag(dag_id: str, body: _DagRunRequest) -> RunResponse:
+    async def run_dag(
+        dag_id: str,
+        select: Optional[List[str]] = Form(
+            None,
+            description="Model names to run (and their upstream dependencies). Repeat for multiple.",
+        ),
+        promptdata: Optional[str] = Form(
+            None,
+            description='JSON-encoded dict of template variables, e.g. `{"topic": "AI"}`.',
+        ),
+        promptfiles: Optional[List[UploadFile]] = File(
+            None,
+            description=(
+                "Files required by models that declare `promptfiles` in their config block. "
+                "Each file's filename (without extension) is used as the promptfile key."
+            ),
+        ),
+    ) -> RunResponse:
         """
-        Execute the models listed in ``select`` (and all their upstream
-        dependencies) from the DAG previously registered via ``POST /dag``.
+        Execute the models listed in ``select`` (and their upstream dependencies)
+        from the DAG previously registered via ``POST /dag``.
 
-        Pass ``promptdata`` to supply runtime template variables.
+        Accepts **multipart/form-data** so that both runtime variables (``promptdata``)
+        and file inputs (``promptfiles``) can be sent in the same request.
         """
+        try:
+            pd = _parse_promptdata(promptdata)
+        except ValueError as exc:
+            return RunResponse(outputs={}, errors=[str(exc)])
+
+        pf = _parse_promptfiles(promptfiles)
+
         try:
             outputs = pbt.run(
                 dag_id=dag_id,
-                select=body.select or None,
-                promptdata=body.promptdata or None,
+                select=select or None,
+                promptdata=pd,
+                promptfiles=pf,
                 verbose=False,
             )
         except Exception as exc:

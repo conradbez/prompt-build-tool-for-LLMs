@@ -30,20 +30,32 @@ export async function submitDag(nodes: DagNodePayload[]): Promise<DagResponse> {
   return res.json();
 }
 
-/** Run one or more models from a previously registered DAG. */
+/**
+ * Run one or more models from a previously registered DAG.
+ * Sent as multipart/form-data so promptfiles (File objects) can be included.
+ */
 export async function runDag(
   dagId: string,
   select?: string[],
   promptdata?: Record<string, string>,
+  promptfiles?: Record<string, File>,
 ): Promise<RunResponse> {
-  const res = await fetch(`${BASE}/dag/${dagId}/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ select, promptdata }),
-  });
+  const form = new FormData();
+  select?.forEach((s) => form.append('select', s));
+  if (promptdata && Object.keys(promptdata).length > 0) {
+    form.append('promptdata', JSON.stringify(promptdata));
+  }
+  if (promptfiles) {
+    for (const [name, file] of Object.entries(promptfiles)) {
+      // Use the key as filename — server strips extension to derive the promptfile key
+      form.append('promptfiles', file, name);
+    }
+  }
+  // Do NOT set Content-Type — browser sets multipart boundary automatically
+  const res = await fetch(`${BASE}/dag/${dagId}/run`, { method: 'POST', body: form });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`POST /dag/${dagId}/run failed (${res.status}): ${text}`);
   }
-  return res.json();
+  return res.json() as Promise<RunResponse>;
 }
