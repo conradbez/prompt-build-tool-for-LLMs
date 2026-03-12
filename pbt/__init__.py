@@ -5,8 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Callable
 
-from pbt.types import PromptFile
-from pbt.executor.graph import models_from_dict
+from pbt.types import PromptFile, PromptModelsDict
 
 __version__ = "0.1.0"
 
@@ -20,7 +19,7 @@ class ModelStatus(Enum):
 
 def run(
     models_dir: str = "models",
-    models: dict[str, str] | None = None,
+    models_from_dict: PromptModelsDict | dict[str, str] | None = None,
     select: list[str] | None = None,
     dag_id: str | None = None,
     llm_call: Callable[[str], str] | None = None,
@@ -84,7 +83,7 @@ def run(
     from pbt.executor.parser import _SKIP_OUTPUT
     from pbt.executor.graph import (
         load_models,
-        models_from_dict,
+        _build_models_from_dict,
         execution_order,
         build_dag,
         compute_dag_hash,
@@ -112,8 +111,9 @@ def run(
             )
         all_models = models_from_json(dag_json)
         dag_hash = dag_id
-    elif models is not None:
-        all_models = models_from_dict(models)
+    elif models_from_dict is not None:
+        raw = models_from_dict.root if isinstance(models_from_dict, PromptModelsDict) else models_from_dict
+        all_models = _build_models_from_dict(raw)
         dag_hash = compute_dag_hash(all_models)
         db.save_dag(dag_hash, models_to_json(all_models))
     else:
