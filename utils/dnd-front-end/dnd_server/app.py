@@ -9,7 +9,7 @@ import json
 from typing import Any, List, Optional
 
 try:
-    from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+    from fastapi import FastAPI, File, Form, Query, UploadFile
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import Response
     from pydantic import BaseModel
@@ -54,23 +54,6 @@ class RunResponse(BaseModel):
     errors: list[str] = []
 
 
-class _DagNode(BaseModel):
-    name: str
-    source: str
-
-
-class _DagSubmit(BaseModel):
-    nodes: List[_DagNode]
-
-
-class _DagResponse(BaseModel):
-    dag_id: str
-
-
-class _DagRunRequest(BaseModel):
-    select: Optional[List[str]] = None
-    promptdata: Optional[dict] = None
-
 
 def _filter_output(serialised: dict[str, Any], output_model: str | None) -> dict[str, Any]:
     """Return only the requested model's output, or all outputs if not specified."""
@@ -85,8 +68,9 @@ def _serialise(outputs: dict) -> tuple[dict[str, Any], list[str]]:
     serialised: dict[str, Any] = {}
     errors: list[str] = []
     for name, value in outputs.items():
-        if isinstance(value, pbt.ModelStatus):
-            serialised[name] = value.value
+        if isinstance(value, pbt.ModelError):
+            errors.append(f"{name}: {value.message}")
+        elif isinstance(value, pbt.ModelStatus):
             errors.append(f"{name}: {value.value}")
         else:
             serialised[name] = value
@@ -231,12 +215,7 @@ def create_app(
     # import overhead and surfaces import errors at startup rather than on first call.
     from pbt.executor.graph import (
         load_models, get_dag_promptdata, get_dag_promptfiles,
-        build_models_from_dict, compute_dag_hash, models_to_json,
     )
-    from pbt import db as _db
-
-    # Initialise SQLite schema once at startup (idempotent).
-    _db.init_db()
 
     # Detect promptdata() keys and promptfile names at startup so the OpenAPI
     # schema is accurate.
@@ -365,44 +344,20 @@ def create_app(
     app.get("/run", response_model=RunResponse, summary="Run models (query params)")(run_get)
 
     # -----------------------------------------------------------------------
-    # DAG endpoints — used by the drag-and-drop front-end (utils/dnd-front-end)
+    # DAG endpoint — used by the drag-and-drop front-end (utils/dnd-front-end)
     # -----------------------------------------------------------------------
 
     @app.post(
-        "/dag",
-        response_model=_DagResponse,
-        summary="Register a DAG from the front-end editor",
-        tags=["DAG editor"],
-    )
-    def submit_dag(body: _DagSubmit) -> _DagResponse:
-        """
-        Receive a list of nodes ``{name, source}`` from the drag-and-drop UI,
-        build a PromptModel DAG, persist it in the database, and return the
-        stable ``dag_id`` that the front-end can use for subsequent ``/run``
-        calls.
-
-        The ``source`` field of each node is a raw Jinja2 prompt template
-        (identical to a ``.prompt`` file) including any ``ref()`` and
-        ``promptdata()`` calls.
-        """
-        models_dict = {node.name: node.source for node in body.nodes}
-        try:
-            models_map = build_models_from_dict(models_dict)
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-
-        dag_hash = compute_dag_hash(models_map)
-        _db.save_dag(dag_hash, models_to_json(models_map))
-        return _DagResponse(dag_id=dag_hash)
-
-    @app.post(
-        "/dag/{dag_id}/run",
+        "/dag/run",
         response_model=RunResponse,
-        summary="Run one or more models from a registered DAG",
+        summary="Run models from a DAG defined inline",
         tags=["DAG editor"],
     )
     async def run_dag(
-        dag_id: str,
+        nodes: str = Form(
+            ...,
+            description='JSON array of {"name": "...", "source": "..."} objects.',
+        ),
         select: Optional[List[str]] = Form(
             None,
             description="Model names to run (and their upstream dependencies). Repeat for multiple.",
@@ -418,14 +373,24 @@ def create_app(
                 "Each file's filename (without extension) is used as the promptfile key."
             ),
         ),
+        gemini_key: Optional[str] = Form(
+            None,
+            description="Gemini API key. If provided, sets GEMINI_API_KEY for this run.",
+        ),
     ) -> RunResponse:
         """
-        Execute the models listed in ``select`` (and their upstream dependencies)
-        from the DAG previously registered via ``POST /dag``.
-
-        Accepts **multipart/form-data** so that both runtime variables (``promptdata``)
-        and file inputs (``promptfiles``) can be sent in the same request.
+        Build and execute a DAG from inline node definitions in a single request.
+        No separate registration step required — pbt handles caching internally.
         """
+        from client import make_llm_call, llm_call as default_llm_call
+        llm_call_fn = make_llm_call(gemini_key) if gemini_key else default_llm_call
+
+        try:
+            nodes_list = json.loads(nodes)
+            models_dict = {n["name"]: n["source"] for n in nodes_list}
+        except Exception as exc:
+            return RunResponse(outputs={}, errors=[f"Invalid nodes payload: {exc}"])
+
         try:
             pd = _parse_promptdata(promptdata)
         except ValueError as exc:
@@ -435,10 +400,11 @@ def create_app(
 
         try:
             outputs = pbt.run(
-                dag_id=dag_id,
+                models_from_dict=models_dict,
                 select=select or None,
                 promptdata=pd,
                 promptfiles=pf,
+                llm_call=llm_call_fn,
                 verbose=False,
             )
         except Exception as exc:

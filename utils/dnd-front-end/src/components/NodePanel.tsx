@@ -14,7 +14,6 @@ interface NodePanelProps {
   output: string | undefined;
   errors: string[];
   isRunning: boolean;
-  dagId: string | null;
   otherNodeNames: string[];
   onPromptChange: (value: string) => void;
   onRename: (newName: string) => void;
@@ -35,7 +34,6 @@ export default function NodePanel({
   output,
   errors,
   isRunning,
-  dagId,
   otherNodeNames,
   onPromptChange,
   onRename,
@@ -45,6 +43,25 @@ export default function NodePanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const [promptHeight, setPromptHeight] = useState(240);
+  const dragStart = useRef<{ y: number; h: number } | null>(null);
+
+  const handleDragMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragStart.current = { y: e.clientY, h: promptHeight };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragStart.current) return;
+      const delta = ev.clientY - dragStart.current.y;
+      setPromptHeight(Math.max(80, dragStart.current.h + delta));
+    };
+    const onUp = () => {
+      dragStart.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [promptHeight]);
 
   // draftName is initialized once per mount; the parent passes key={nodeId} so
   // this component remounts when the selected node changes — no useEffect needed.
@@ -151,7 +168,7 @@ export default function NodePanel({
       </div>
 
       {/* Prompt editor */}
-      <div className="px-4 pt-3 pb-2">
+      <div className="px-4 pt-3 pb-0">
         <label className="block text-xs font-medium text-muted-foreground mb-1">
           Prompt template
           <span className="ml-1 font-normal">
@@ -167,7 +184,7 @@ export default function NodePanel({
             value={prompt}
             onChange={handleTextChange}
             onKeyDown={handleKeyDown}
-            rows={10}
+            style={{ height: promptHeight }}
             spellCheck={false}
             className="font-mono text-sm resize-none leading-relaxed"
             placeholder={`Write a Jinja2 prompt template.\n\nExample:\nWrite an article about {{ promptdata('topic') }}\n\nOr reference another model:\n{{ ref('article') }}`}
@@ -181,7 +198,7 @@ export default function NodePanel({
                   key={name}
                   className={`autocomplete-item ${idx === activeSuggestion ? 'selected' : ''}`}
                   onMouseDown={(e) => {
-                    e.preventDefault(); // Keep textarea focused
+                    e.preventDefault();
                     insertSuggestion(name);
                   }}
                 >
@@ -192,27 +209,30 @@ export default function NodePanel({
           )}
         </div>
 
-        <p className="text-[11px] text-muted-foreground mt-1">
+        <p className="text-[11px] text-muted-foreground mt-1 mb-0">
           Type <code className="bg-muted px-0.5 rounded">ref(&#39;</code> to autocomplete a model
           name. Arrow keys to navigate, Enter/Tab to insert.
         </p>
       </div>
 
+      {/* Drag handle */}
+      <div
+        onMouseDown={handleDragMouseDown}
+        className="h-2 mx-4 my-1 rounded cursor-row-resize flex items-center justify-center group"
+        title="Drag to resize"
+      >
+        <div className="w-8 h-0.5 rounded-full bg-border group-hover:bg-muted-foreground transition-colors" />
+      </div>
+
       {/* Run button */}
       <div className="px-4 py-2 border-t border-border">
-        {dagId ? (
-          <Button onClick={onRun} disabled={isRunning} size="sm">
-            {isRunning ? (
-              <><RefreshCwIcon size={13} className="animate-spin" /> Running…</>
-            ) : (
-              <><PlayIcon size={13} /> Run model</>
-            )}
-          </Button>
-        ) : (
-          <Alert variant="warning">
-            Submit the DAG first to enable running individual models.
-          </Alert>
-        )}
+        <Button onClick={onRun} disabled={isRunning} size="sm">
+          {isRunning ? (
+            <><RefreshCwIcon size={13} className="animate-spin" /> Running…</>
+          ) : (
+            <><PlayIcon size={13} /> Run model</>
+          )}
+        </Button>
       </div>
 
       {/* Errors */}
@@ -221,11 +241,13 @@ export default function NodePanel({
           <Alert variant="destructive">
             <AlertTitle>Run errors</AlertTitle>
             <AlertDescription>
-              {errors.map((e, i) => (
-                <p key={i} className="font-mono text-xs">
-                  {e}
-                </p>
-              ))}
+              <div className="max-h-32 overflow-y-auto mt-1">
+                {errors.map((e, i) => (
+                  <p key={i} className="font-mono text-xs whitespace-pre-wrap">
+                    {e}
+                  </p>
+                ))}
+              </div>
             </AlertDescription>
           </Alert>
         </div>

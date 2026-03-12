@@ -16,10 +16,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useMutation } from '@tanstack/react-query';
-import {
-  PlusIcon, SendIcon, AlertCircleIcon, CheckCircleIcon,
-  DatabaseIcon, FileIcon,
-} from 'lucide-react';
+import { PlusIcon, DatabaseIcon, FileIcon, KeyIcon } from 'lucide-react';
 
 import PromptNode, { type PromptNodeData } from './PromptNode';
 import NodePanel from './NodePanel';
@@ -30,12 +27,12 @@ import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { submitDag, runDag } from '../api';
+import { runDag } from '../api';
 
 // ── localStorage persistence ──────────────────────────────────────────────────
 
 const STORAGE_KEY = 'pbt_dag_state';
+const GEMINI_KEY_STORAGE = 'pbt_gemini_key';
 
 const _initialSavedState: Record<string, unknown> | null = (() => {
   try {
@@ -108,7 +105,6 @@ export default function DAGEditor() {
     (_initialSavedState?.nodeRefs as Record<string, string[]> | undefined) ?? {},
   );
 
-  const [dagId, setDagId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [nodeOutputs, setNodeOutputs] = useState<Record<string, string>>({});
   const [runErrors, setRunErrors] = useState<string[]>([]);
@@ -129,9 +125,17 @@ export default function DAGEditor() {
       .map((r) => ({ ...r, file: null })),
   );
 
+  const [geminiKey, setGeminiKey] = useState<string>(
+    () => localStorage.getItem(GEMINI_KEY_STORAGE) ?? '',
+  );
+
   const rfInstance = useRef<ReactFlowInstance | null>(null);
 
   // ── Persist to localStorage ───────────────────────────────────────────────
+
+  useEffect(() => {
+    localStorage.setItem(GEMINI_KEY_STORAGE, geminiKey);
+  }, [geminiKey]);
 
   useEffect(() => {
     try {
@@ -194,7 +198,6 @@ export default function DAGEditor() {
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   const markDirty = useCallback(() => {
-    setDagId(null);
     setNodeOutputs({});
     setRunErrors([]);
   }, []);
@@ -329,28 +332,17 @@ export default function DAGEditor() {
     [modelNameSet, updateNodeData, markDirty],
   );
 
-  // ── DAG submit ────────────────────────────────────────────────────────────
-
-  const submitMutation = useMutation({
-    mutationFn: () =>
-      submitDag(
-        nodes.map((n) => ({
-          name: (n.data as PromptNodeData).label,
-          source: nodePrompts[n.id] ?? '',
-        })),
-      ),
-    onSuccess: (data) => {
-      setDagId(data.dag_id);
-      setNodeOutputs({});
-      setRunErrors([]);
-    },
-  });
-
   // ── Model run ─────────────────────────────────────────────────────────────
 
   const runMutation = useMutation({
-    mutationFn: ({ modelName, id }: { modelName: string; id: string }) =>
-      runDag(id, [modelName], promptDataForApi, promptFilesForApi),
+    mutationFn: ({ modelName }: { modelName: string }) =>
+      runDag(
+        nodes.map((n) => ({ name: (n.data as PromptNodeData).label, source: nodePrompts[n.id] ?? '' })),
+        [modelName],
+        promptDataForApi,
+        promptFilesForApi,
+        geminiKey || undefined,
+      ),
 
     onMutate: ({ modelName }) => {
       const nodeId = nodes.find((n) => (n.data as PromptNodeData).label === modelName)?.id;
@@ -378,22 +370,10 @@ export default function DAGEditor() {
     },
   });
 
-  const handleRunModel = useCallback(async () => {
+  const handleRunModel = useCallback(() => {
     if (!selectedNode) return;
-    let currentDagId = dagId;
-    if (!currentDagId) {
-      try {
-        const result = await submitMutation.mutateAsync();
-        currentDagId = result.dag_id;
-      } catch {
-        return; // submit error already shown in UI
-      }
-    }
-    runMutation.mutate({
-      modelName: (selectedNode.data as PromptNodeData).label,
-      id: currentDagId,
-    });
-  }, [selectedNode, dagId, submitMutation, runMutation]);
+    runMutation.mutate({ modelName: (selectedNode.data as PromptNodeData).label });
+  }, [selectedNode, runMutation]);
 
   // ── Derived panel props ───────────────────────────────────────────────────
 
@@ -401,17 +381,8 @@ export default function DAGEditor() {
     ? (selectedNode.data as PromptNodeData).label
     : null;
 
-  // Derived from mutation state — eliminates separate runningModel state variable
   const isSelectedRunning =
     runMutation.isPending && runMutation.variables?.modelName === selectedModelName;
-
-  // ── Status bar ────────────────────────────────────────────────────────────
-
-  const statusLabel = dagId
-    ? `DAG registered — id: ${dagId.slice(0, 12)}…`
-    : nodes.length === 0
-    ? 'Add nodes to get started'
-    : 'DAG not submitted — press Submit to register';
 
   const promptDataCount = promptDataRows.filter((r) => r.name.trim()).length;
   const promptFileCount = promptFileRows.filter((r) => r.name.trim() && r.file).length;
@@ -424,16 +395,15 @@ export default function DAGEditor() {
           PBT DAG Editor
         </span>
 
-        {/* Status indicator */}
-        <div className="flex items-center gap-1.5 text-xs flex-1 min-w-0">
-          {dagId ? (
-            <CheckCircleIcon size={13} className="text-green-500 shrink-0" />
-          ) : (
-            <AlertCircleIcon size={13} className="text-amber-500 shrink-0" />
-          )}
-          <span className={`truncate ${dagId ? 'text-green-700' : 'text-amber-700'}`}>
-            {statusLabel}
-          </span>
+        <div className="flex items-center gap-1 flex-1">
+          <KeyIcon size={13} className="text-muted-foreground shrink-0" />
+          <Input
+            type="password"
+            value={geminiKey}
+            onChange={(e) => setGeminiKey(e.target.value)}
+            placeholder="Gemini API key"
+            className="h-7 text-xs font-mono max-w-48"
+          />
         </div>
 
         {/* Right-side manager + action buttons */}
@@ -467,28 +437,11 @@ export default function DAGEditor() {
           )}
         </Button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => submitMutation.mutate()}
-          disabled={nodes.length === 0 || submitMutation.isPending}
-        >
-          <SendIcon size={13} />
-          {submitMutation.isPending ? 'Submitting…' : dagId ? 'Resubmit DAG' : 'Submit DAG'}
-        </Button>
-
         <Button size="sm" onClick={openAddDialog}>
           <PlusIcon size={13} />
           Add node
         </Button>
       </header>
-
-      {/* ── Submit error ── */}
-      {submitMutation.isError && (
-        <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
-          <AlertDescription>{(submitMutation.error as Error).message}</AlertDescription>
-        </Alert>
-      )}
 
       {/* ── Main content ── */}
       <div className="flex flex-1 min-h-0">
@@ -531,7 +484,6 @@ export default function DAGEditor() {
             output={nodeOutputs[selectedModelName]}
             errors={runErrors}
             isRunning={isSelectedRunning}
-            dagId={dagId}
             otherNodeNames={otherNodeNames}
             onPromptChange={(value) => handlePromptChange(selectedNode.id, value)}
             onRename={(newName) => handleRename(selectedNode.id, newName)}

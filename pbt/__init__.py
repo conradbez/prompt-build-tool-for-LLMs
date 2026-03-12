@@ -14,7 +14,16 @@ class ModelStatus(Enum):
     """Returned in the pbt.run() dict for models that produced no LLM output."""
     SKIPPED = "skipped"          # upstream dependency failed → model was not run
     PROMPT_SKIPPED = "prompt_skipped"  # prompt rendered to "SKIP THIS MODEL"
-    ERROR = "error"              # LLM call or render raised an exception
+    ERROR = "error"              # LLM call or render raised an exception (legacy)
+
+
+class ModelError:
+    """Returned by pbt.run() when a model fails; carries the exception message."""
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def __str__(self) -> str:
+        return f"error: {self.message}"
 
 
 def run(
@@ -237,7 +246,7 @@ def run(
         if r.status == "skipped":
             return ModelStatus.SKIPPED
         if r.status == "error":
-            return ModelStatus.ERROR
+            return ModelError(r.error)
         if r.llm_output == _SKIP_OUTPUT:
             return ModelStatus.PROMPT_SKIPPED
         return r.llm_output
