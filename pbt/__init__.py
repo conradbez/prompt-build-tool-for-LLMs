@@ -2,13 +2,37 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version as package_version
+from pathlib import Path
 from typing import Awaitable, Callable
 
 from pbt.storage.base import StorageBackend
 from pbt.types import PromptFile, PromptModelsDict
 
-__version__ = "0.1.0"
+
+def _version_from_pyproject() -> str:
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    contents = pyproject.read_text(encoding="utf-8")
+    project_block = re.search(r"(?ms)^\[project\]\n(.*?)(?:^\[|\Z)", contents)
+    if project_block is None:
+        raise RuntimeError("Could not find [project] table in pyproject.toml")
+
+    match = re.search(r'^version\s*=\s*"([^"]+)"\s*$', project_block.group(1), re.MULTILINE)
+    if match is None:
+        raise RuntimeError("Could not find project.version in pyproject.toml")
+    return match.group(1)
+
+
+def _detect_version() -> str:
+    try:
+        return package_version("prompt-build-tool")
+    except PackageNotFoundError:
+        return _version_from_pyproject()
+
+
+__version__ = _detect_version()
 
 
 class ModelStatus(Enum):

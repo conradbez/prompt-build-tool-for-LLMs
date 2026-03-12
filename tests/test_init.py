@@ -1,7 +1,9 @@
 """Tests for `pbt init`."""
 
+import re
 from pathlib import Path
 
+import pbt
 import pytest
 
 from tests.conftest import run_pbt, init_project
@@ -96,3 +98,11 @@ def test_init_default_project_name(tmp_path: Path) -> None:
 def test_init_output_mentions_run_command(tmp_path: Path) -> None:
     result = run_pbt("init", "proj", cwd=tmp_path)
     assert "pbt run" in result.stdout
+
+
+def test_package_version_matches_pyproject() -> None:
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    contents = pyproject.read_text(encoding="utf-8")
+    match = re.search(r"(?m)^version = \"([^\"]+)\"$", contents)
+    assert match is not None
+    assert pbt.__version__ == match.group(1)
