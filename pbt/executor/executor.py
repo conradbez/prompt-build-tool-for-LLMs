@@ -248,7 +248,18 @@ async def execute_run(
 
         pending = still_waiting
         if not made_progress:
-            # No model could run this pass — unresolvable (e.g. circular deps)
+            # No model could run this pass — unresolvable (e.g. circular deps).
+            # Emit an error result for each stuck model so nothing is silently dropped.
+            for model in still_waiting:
+                storage_backend.mark_model_error(run_id, model.name, "Unresolvable dependency (possible cycle)")
+                result = ModelRunResult(
+                    model_name=model.name,
+                    status="error",
+                    error=f"Unresolvable dependency (possible cycle): {model.depends_on}",
+                )
+                results.append(result)
+                if on_model_done:
+                    on_model_done(result)
             break
 
     return results
