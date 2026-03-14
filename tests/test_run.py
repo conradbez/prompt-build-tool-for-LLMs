@@ -270,6 +270,53 @@ async def test_python_api_supports_async_llm_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_skip_this_and_downstream_skips_current_and_children() -> None:
+    """skip_this_and_downstream skips the caller and all downstream models."""
+    llm_called_for: list[str] = []
+
+    def llm_call(prompt: str) -> str:
+        llm_called_for.append(prompt)
+        return "should not reach"
+
+    result = await pbt.run(
+        models_from_dict={
+            "gate": '{{ skip_this_and_downstream("skipped gate") }}',
+            "child": "{{ ref('gate') }} — do something",
+            "grandchild": "{{ ref('child') }} — do more",
+        },
+        llm_call=llm_call,
+        verbose=False,
+        storage_backend=MemoryStorageBackend(),
+    )
+
+    assert llm_called_for == [], "LLM should not be called for any model"
+    assert result["gate"] == "skipped gate"
+    assert result["child"] is pbt.ModelStatus.SKIPPED
+    assert result["grandchild"] is pbt.ModelStatus.SKIPPED
+
+
+@pytest.mark.asyncio
+async def test_skip_this_and_downstream_does_not_affect_unrelated_models() -> None:
+    """skip_this_and_downstream only skips the signalling branch, not unrelated models."""
+    def llm_call(prompt: str) -> str:
+        return "ran"
+
+    result = await pbt.run(
+        models_from_dict={
+            "gate": '{{ skip_this_and_downstream("") }}',
+            "child": "{{ ref('gate') }} — skipped branch",
+            "independent": "independent model with no deps",
+        },
+        llm_call=llm_call,
+        verbose=False,
+        storage_backend=MemoryStorageBackend(),
+    )
+
+    assert result["independent"] == "ran"
+    assert result["child"] is pbt.ModelStatus.SKIPPED
+
+
+@pytest.mark.asyncio
 async def test_python_api_supports_sync_llm_call_under_async_run() -> None:
     def llm_call(prompt: str) -> str:
         return "ok"

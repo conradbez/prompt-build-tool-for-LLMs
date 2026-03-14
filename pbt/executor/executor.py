@@ -105,6 +105,8 @@ async def execute_run(
     model_outputs: dict[str, str] = dict(preloaded_outputs or {})
     # Tracks models whose LLM call was skipped via a skip function in the template.
     prompt_skipped_models: set[str] = set()
+    # Tracks models that triggered skip_this_and_downstream — their dependents skip too.
+    skip_downstream_models: set[str] = set()
 
     # Register all models as 'pending' up front (mirrors dbt's deferred state).
     for model in ordered_models:
@@ -148,6 +150,22 @@ async def execute_run(
                     on_model_done(result)
                 continue
 
+            # Skip if any dependency called skip_this_and_downstream
+            skip_signalled_by = [d for d in model.depends_on if d in skip_downstream_models]
+            if skip_signalled_by:
+                storage_backend.mark_model_skipped(run_id, model.name)
+                result = ModelRunResult(
+                    model_name=model.name,
+                    status="skipped",
+                    error=f"Skipped because upstream models signalled skip_this_and_downstream: {skip_signalled_by}",
+                )
+                results.append(result)
+                skip_downstream_models.add(model.name)  # propagate further downstream
+                completed.add(model.name)
+                if on_model_done:
+                    on_model_done(result)
+                continue
+
             if on_model_start:
                 on_model_start(model.name)
 
@@ -178,6 +196,8 @@ async def execute_run(
                     llm_output = skip_state.skip_value
                     elapsed_ms = 0
                     prompt_skipped_models.add(model.name)
+                    if skip_state.skip_downstream:
+                        skip_downstream_models.add(model.name)
                 elif (cached := storage_backend.get_cached_llm_output(cache_key)) is not None:
                     llm_output = cached
                     elapsed_ms = 0

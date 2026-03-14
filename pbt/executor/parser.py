@@ -30,8 +30,10 @@ class _RenderState:
 
     ``skip_value is None``  → model runs normally.
     ``skip_value is not None``  → skip the LLM call; use the value as output.
+    ``skip_downstream``  → also propagate a skip signal to all downstream models.
     """
     skip_value: str | None = None
+    skip_downstream: bool = False
 
 # Regex that finds every ref('...') or ref("...") call in raw template text.
 # Used for static dependency extraction WITHOUT executing the template.
@@ -106,6 +108,7 @@ def extract_jinja_config(template_source: str) -> dict[str, str]:
         "return_list_RAG_results": lambda *a, **kw: [],
         "was_skipped": lambda *a, **kw: False,
         "skip_and_set_to_value": lambda value="": "",
+        "skip_this_and_downstream": lambda value="": "",
     }
 
     try:
@@ -209,7 +212,15 @@ def render_prompt(
         state.skip_value = rendered_value
         return rendered_value
 
+    def skip_this_and_downstream(value="") -> str:
+        """Skip this model's LLM call and signal all downstream models to skip too."""
+        rendered_value = env.from_string(str(value)).render(**{**context, "skip_this_and_downstream": lambda nested_value="": str(nested_value)})
+        state.skip_value = rendered_value
+        state.skip_downstream = True
+        return rendered_value
+
     context["skip_and_set_to_value"] = skip_and_set_to_value
+    context["skip_this_and_downstream"] = skip_this_and_downstream
 
     template = env.from_string(template_source)
     return template.render(**context), state
