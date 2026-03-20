@@ -118,6 +118,100 @@ def test_run_validation_failure_marks_model_error(tmp_path: Path) -> None:
 #     assert "succeeded" in result.stdout
 
 
+# ---------------------------------------------------------------------------
+# Loop model tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_loop_model_calls_llm_per_item(tmp_path: Path) -> None:
+    """Loop model iterates over upstream list and combines results."""
+    import json
+    from pbt.storage import MemoryStorageBackend
+
+    models = {
+        "items": '{{ config(output_format="json") }}\nReturn a list.',
+        "processed": '{{ config(model_type="loop") }}\nProcess: {{ ref("items") }}',
+    }
+
+    calls: list[str] = []
+
+    def fake_llm(prompt: str) -> str:
+        calls.append(prompt)
+        if "Return a list." in prompt:
+            return json.dumps(["apple", "banana", "cherry"])
+        return f"processed: {prompt.split('Process: ')[-1].strip()}"
+
+    outputs = await pbt.run(
+        models_from_dict=models,
+        llm_call=fake_llm,
+        verbose=False,
+        storage_backend=MemoryStorageBackend(),
+    )
+
+    assert "processed" in outputs
+    assert not isinstance(outputs["processed"], pbt.ModelStatus)
+    output = json.loads(outputs["processed"])
+    assert isinstance(output, list)
+    assert len(output) == 3
+    # LLM was called once for items + 3 times for each element
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_loop_model_output_available_downstream() -> None:
+    """Downstream model can ref() the loop model's combined list output."""
+    import json
+    from pbt.storage import MemoryStorageBackend
+
+    models = {
+        "items": '{{ config(output_format="json") }}\nList.',
+        "processed": '{{ config(model_type="loop") }}\nItem: {{ ref("items") }}',
+        "summary": 'Summarize: {{ ref("processed") }}',
+    }
+
+    def fake_llm(prompt: str) -> str:
+        if "List." in prompt:
+            return json.dumps(["x", "y"])
+        if "Item:" in prompt:
+            return f"done:{prompt.split('Item:')[-1].strip()}"
+        return f"summary of {prompt}"
+
+    outputs = await pbt.run(
+        models_from_dict=models,
+        llm_call=fake_llm,
+        verbose=False,
+        storage_backend=MemoryStorageBackend(),
+    )
+
+    assert "summary" in outputs
+    assert not isinstance(outputs["summary"], pbt.ModelStatus)
+    # The summary prompt contained the combined loop output (a JSON list)
+    assert "done:" in outputs["summary"]
+
+
+@pytest.mark.asyncio
+async def test_loop_model_error_when_no_list_dep() -> None:
+    """Loop model errors clearly when no upstream returns a list."""
+    from pbt.storage import MemoryStorageBackend
+
+    models = {
+        "items": "Just a text model.",
+        "processed": '{{ config(model_type="loop") }}\nItem: {{ ref("items") }}',
+    }
+
+    def fake_llm(prompt: str) -> str:
+        return "plain text, not a list"
+
+    outputs = await pbt.run(
+        models_from_dict=models,
+        llm_call=fake_llm,
+        verbose=False,
+        storage_backend=MemoryStorageBackend(),
+    )
+
+    assert outputs["processed"] == pbt.ModelStatus.ERROR
+
+
 def _load_env() -> dict:
     """Load .env from project root, merged with os.environ."""
     import os

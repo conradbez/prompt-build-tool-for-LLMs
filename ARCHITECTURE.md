@@ -12,6 +12,7 @@ pbt/
     graph.py           PromptModel dataclass, DAG building, topological sort, serialisation
     parser.py          Jinja2 rendering, config() parsing
     executor.py        Pure execution loop — no file discovery, no CLI concerns
+    model_constructs.py  Specialised model_type handlers (loop, …) imported by executor
   llm.py / rag.py / validator.py  Backend resolvers
   db.py                SQLite schema + queries
   tester.py / docs.py  pbt test and pbt docs implementations
@@ -32,6 +33,8 @@ pbt/
 **`--select` runs the full upstream chain fresh.** `pbt run --select tweet` runs `tweet` and all its ancestors in dependency order. The prompt cache makes unchanged upstream nodes instant — no stale-output risk, no need for a previous run of the same DAG.
 
 **`model_outputs` is `dict[str, str | dict | list]`.** When a model declares `output_format: json`, its entry is a parsed Python object, not a string. Downstream `ref('model')` in Jinja receives the object, enabling `{{ ref('model').key }}` access. The DB always stores canonical JSON strings.
+
+**`model_type` constructs live in `model_constructs.py`.** Specialised execution strategies (e.g. `loop`) are async functions in `pbt/executor/model_constructs.py`, each with the signature `execute_*(model, model_outputs, ...) -> ModelRunResult`. The executor dispatches to them by checking `model.config.get("model_type")` and imports the relevant function. Adding a new construct means adding one function there and one `elif` branch in `executor.py`.
 
 ---
 

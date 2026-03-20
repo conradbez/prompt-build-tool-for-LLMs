@@ -334,6 +334,40 @@ When `output_format: json` is set, pbt validates the LLM output as JSON (strippi
 
 ---
 
+## Looping over a list (`model_type="loop"`)
+
+Set `model_type="loop"` in `config()` to call the LLM once per item in an upstream list, then combine the results back into a list.
+
+**1. Upstream model returns a JSON list:**
+
+```jinja
+{# models/articles.prompt #}
+{{ config(output_format="json") }}
+Return a JSON array of 3 article titles about {{ promptdata("topic") }}.
+```
+
+**2. Loop model processes each item:**
+
+```jinja
+{# models/summaries.prompt #}
+{{ config(model_type="loop") }}
+
+Write a one-paragraph summary for this article title:
+{{ ref('articles') }}
+```
+
+`ref('articles')` returns the **current item** on each iteration — no new syntax needed.
+
+**Result:** `summaries` outputs a JSON list with one entry per item from `articles`. Downstream models receive the full combined list via `ref('summaries')`.
+
+**Multiple list dependencies** — if more than one upstream model returns a list, specify which to loop over:
+
+```jinja
+{{ config(model_type="loop", loop_over="articles") }}
+```
+
+---
+
 ## Validation (`validation/`)
 
 Create a `validation/` directory with Python files matching model names. Each file must define `validate(prompt, result) -> bool`. If it returns `False`, the model is marked as an error and stops it use in downstream models.
