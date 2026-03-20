@@ -40,9 +40,11 @@ def _parse_json_output(raw: str) -> dict | list:
     try:
         return json.loads(stripped)
     except json.JSONDecodeError as exc:
+        preview = stripped[:120] + ("..." if len(stripped) > 120 else "")
         raise ValueError(
-            f"Model declared output_format: json but LLM returned invalid JSON: {exc}\n"
-            f"Output was: {raw!r}"
+            f"output_format='json' set but response is not valid JSON "
+            f"(at line {exc.lineno}, col {exc.colno}): {exc.msg}\n"
+            f"Got: {preview!r}"
         ) from exc
 
 
